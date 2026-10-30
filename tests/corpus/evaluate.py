@@ -1,0 +1,577 @@
+"""Measure conversion quality on the real-world corpus (see manifest.json, fetch.py).
+
+    python tests/corpus/evaluate.py --label before            # all docs, every installed backend
+    python tests/corpus/evaluate.py --label after --ids arxiv-llama --backends pdfminer
+    python tests/corpus/evaluate.py --compare before after     # markdown before/after table
+
+Each conversion runs in its own subprocess (wall time, peak RSS via wait4, hard timeout). Results go to
+tests/corpus/out/<label>/ (results.json, report.md, the EPUBs). The reference text is extracted with pypdfium2's
+text layer, which neither backend uses for text, so it is an independent baseline; image-only excerpts are scored
+against the text layer of the pages they were derived from.
+
+Metrics (all on normalised text: NFKC, lower case, intra-word hyphens and soft hyphens removed):
+  word_recall / word_precision  multiset overlap of alphabetic tokens, EPUB vs reference
+  char_recall / char_precision  multiset overlap of letters and digits (catches lost accents, (cid:N) garbage)
+  pre_share                     share of the text rendered as <pre> code blocks (should be ~0 outside programming books)
+  pua                           private-use / U+FFFD characters left in the EPUB (unreadable without the PDF font), per 10k chars
+  order                         share of reference 6-word shingles (per page, margins excluded) found in the EPUB
+  order_2col                    the same on pages detected as two-column (stream order of LaTeX two-column = reading order)
+  mid_breaks                    paragraphs ending without terminal punctuation followed by one starting lower case, per 1000 <p>
+  hyph_left                     leftover line-end hyphens ("inter- national", "inter-national" when "international" is used), per 10k words
+  hyph_joined                   compounds hyphenated mid-line in the PDF that were glued in the EPUB, per 10k words
+  hdr_leak                      running header/footer lines (text recurring in page margins on >=3 pages) still in the EPUB, share
+                                (heads printed with their page number are matched exactly; others by excess occurrences)
+  pnum_leak                     page numbers left in the text (standalone blocks or glued to the neighbouring words), share
+  outline / nav / chapters / headings, outline_match (share of outline titles found in the EPUB navigation)
+  headings_per_page, chapters_per_100p  structure density; on scans, spurious headings from OCR size noise show up here
+  img_pdf / img_epub            distinct embedded images (>=48 px, not full-page scans) vs images in the EPUB
+  epubcheck                     ERROR+FATAL count (java, or the pdftoepub-test Docker image), -1 when not run
+  s_per_page, rss_mb            wall time per page and peak resident memory of the conversion process
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unicodedata
+import zipfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+CORPUS = HERE.parent / ".corpus"
+OUT = HERE / "out"
+XHTML = "{http://www.w3.org/1999/xhtml}"
+BLOCK_TAGS = {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "pre", "figcaption", "dt", "dd"}
+TERMINAL = tuple(".!?:;…»\"”’)]*")
+MARGIN = 0.08  # top/bottom share of the page height treated as header/footer zone
+ROMAN = re.compile(r"^(?=[ivxlcdm]{2,})m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$", re.I)  # "x" alone is a variable, not a folio
+
+
+# ---------------------------------------------------------------- text normalisation
+
+SPACING_ACCENTS = {"`": "\u0300", "\u00b4": "\u0301", "\u02c6": "\u0302", "\u02dc": "\u0303", "\u00a8": "\u0308", "\u00b8": "\u0327",
+                   "\u02c7": "\u030c"}
+
+
+def norm(text: str) -> str:
+    # old TeX fonts draw accents as separate glyphs ("esp`ece"); compare the composed letters on both sides
+    text = re.sub("([" + "".join(SPACING_ACCENTS) + "])([a-zA-Z\u0131])",
+                  lambda m: SPACING_ACCENTS[m.group(1)] and m.group(2).replace("\u0131", "i") + SPACING_ACCENTS[m.group(1)], text)
+    text = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\x02", "-\n").replace("\xad", "").replace("‐", "-").replace("‑", "-")
+    text = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", text)  # line-end hyphenation
+    text = re.sub(r"(?<=\w)-(?=\w)", "", text)  # intra-word hyphens: "well-known" == "wellknown" on both sides
+    return text.lower()
+
+
+def words(text: str) -> list[str]:
+    return [w for w in re.findall(r"\w+", norm(text)) if any(c.isalpha() for c in w)]
+
+
+def chars(text: str) -> collections.Counter:
+    return collections.Counter(c for c in norm(text) if c.isalnum())
+
+
+def overlap(ref: collections.Counter, out: collections.Counter) -> tuple[float, float]:
+    common = sum((ref & out).values())
+    return (common / max(1, sum(ref.values())), common / max(1, sum(out.values())))
+
+
+def shingles(ws: list[str], k: int = 6) -> list[tuple]:
+    return [tuple(ws[i:i + k]) for i in range(len(ws) - k + 1)]
+
+
+# ---------------------------------------------------------------- reference (pypdfium2 text layer)
+
+def text_lines(tp) -> list[tuple[float, float, float, float, str]]:
+    """The page text in stream order, cut into lines at pdfium's line breaks, each with the box of its glyphs.
+    (Per-rectangle extraction duplicates text on OCR layers whose word boxes overlap.)"""
+    text = tp.get_text_range()
+    n = tp.count_chars()
+    out = []
+    cur, box = [], None
+    for i, ch in enumerate(text):
+        if ch in "\r\n":
+            if cur and "".join(cur).strip():
+                out.append((*box, "".join(cur).strip()))
+            cur, box = [], None
+            continue
+        cur.append(ch)
+        if i < n and not ch.isspace():
+            l, b, r, t = tp.get_charbox(i)
+            box = (l, b, r, t) if box is None else (min(box[0], l), min(box[1], b), max(box[2], r), max(box[3], t))
+        if box is None and not ch.isspace():
+            box = (0, 0, 0, 0)
+    if cur and box and "".join(cur).strip():
+        out.append((*box, "".join(cur).strip()))
+    return out
+
+
+def reference(pdf: Path, pages: list[int] | None = None) -> dict:
+    """Per page: body text (stream order, margins excluded), margin lines, two-column flag, image count; outline."""
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+
+    doc = pdfium.PdfDocument(str(pdf))
+    out_pages = []
+    img_hashes: set = set()
+    for pno in pages or range(1, len(doc) + 1):
+        page = doc[pno - 1]
+        w, h = page.get_size()
+        tp = page.get_textpage()
+        rects = text_lines(tp)
+        top, bottom = h * (1 - MARGIN), h * MARGIN
+        margin = [(("top" if t >= top else "bottom"), txt) for l, b, r, t, txt in rects if b >= top or t <= bottom]
+        body = [x for x in rects if not (x[1] >= top or x[3] <= bottom)]
+        narrow = [x for x in body if x[2] - x[0] < 0.45 * w]
+        left = sum(1 for x in narrow if x[2] < 0.55 * w)
+        right = sum(1 for x in narrow if x[0] > 0.45 * w)
+        twocol = left >= 8 and right >= 8 and (left + right) >= 0.6 * max(1, len(body))
+        n_img = 0
+        for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=3):
+            try:
+                pw, ph = obj.get_px_size()
+                l, b, r, t = obj.get_bounds()
+            except Exception:  # noqa: BLE001
+                continue
+            if pw < 48 or ph < 48 or ((r - l) * (t - b) > 0.7 * w * h):
+                continue
+            key = (pw, ph)
+            try:
+                key = (pw, ph, hash(bytes(obj.get_data(decode_simple=False))[:65536]))
+            except Exception:  # noqa: BLE001
+                pass
+            if key not in img_hashes:
+                img_hashes.add(key)
+                n_img += 1
+        out_pages.append({"pno": pno, "body": "\n".join(x[4] for x in body), "margin": margin, "twocol": twocol, "images": n_img})
+        tp.close()
+        page.close()
+    outline = []
+    if pages is None:
+        try:
+            for item in doc.get_toc():
+                outline.append({"level": item.level, "title": item.get_title() if hasattr(item, "get_title") else item.title})
+        except Exception:  # noqa: BLE001
+            pass
+    doc.close()
+    return {"pages": out_pages, "outline": outline}
+
+
+# ---------------------------------------------------------------- EPUB reading
+
+def read_epub(path: Path) -> dict:
+    from lxml import etree
+
+    z = zipfile.ZipFile(path)
+    opf_name = re.search(rb'full-path="([^"]+)"', z.read("META-INF/container.xml")).group(1).decode()
+    opf = etree.fromstring(z.read(opf_name))
+    base = opf_name.rsplit("/", 1)[0] + "/" if "/" in opf_name else ""
+    ns = {"o": "http://www.idpf.org/2007/opf"}
+    manifest = {i.get("id"): i for i in opf.iterfind(".//o:manifest/o:item", ns)}
+    spine = [manifest[r.get("idref")].get("href") for r in opf.iterfind(".//o:spine/o:itemref", ns)]
+    blocks: list[tuple[str, str, int]] = []  # (tag, text, chapter index)
+    headings = collections.Counter()
+    n_img = 0
+    for ci, href in enumerate(spine):
+        root = etree.fromstring(z.read(base + href))
+        for el in root.iter():
+            if not isinstance(el.tag, str):
+                continue
+            tag = el.tag.replace(XHTML, "")
+            if tag == "img":
+                n_img += 1
+            if tag in BLOCK_TAGS:
+                anc = el.getparent()
+                nested = False
+                while anc is not None:
+                    if isinstance(anc.tag, str) and anc.tag.replace(XHTML, "") in BLOCK_TAGS:
+                        nested = True
+                        break
+                    anc = anc.getparent()
+                if nested:
+                    continue
+                if tag[0] == "h" and tag[1:].isdigit():
+                    headings[tag] += 1
+                ctx = "aside" if any(isinstance(a.tag, str) and a.tag.endswith(("aside", "blockquote")) for a in el.iterancestors()) else ""
+                blocks.append((tag if not ctx else f"{ctx}/{tag}", "".join(el.itertext()), ci))
+    nav_titles = []
+    nav_item = next((i for i in manifest.values() if "nav" in (i.get("properties") or "").split()), None)
+    if nav_item is not None:
+        nav = etree.fromstring(z.read(base + nav_item.get("href")))
+        for n in nav.iter(XHTML + "nav"):
+            if n.get("{http://www.idpf.org/2007/ops}type") == "toc":
+                nav_titles = ["".join(a.itertext()).strip() for a in n.iter(XHTML + "a")]
+    chapters = sum(1 for h in spine if not h.endswith("nav.xhtml"))
+    return {"blocks": blocks, "headings": dict(headings), "images": n_img, "nav": nav_titles, "chapters": chapters}
+
+
+# ---------------------------------------------------------------- metrics
+
+def margin_key(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\d+", "#", norm(text))).strip()
+
+
+def is_pnum(text: str) -> bool:
+    t = text.strip().strip("-–—[]()·•. ")
+    return bool(t) and (t.isdigit() or bool(ROMAN.match(t))) and len(t) <= 6
+
+
+def metrics(ref: dict, ep: dict) -> dict:
+    pages = ref["pages"]
+    ref_text = "\n".join(p["body"] + "\n" + "\n".join(t for _, t in p["margin"]) for p in pages)
+    out_text = "\n".join(b[1] for b in ep["blocks"])
+    rw, ow = collections.Counter(words(ref_text)), collections.Counter(words(out_text))
+    m: dict = {}
+    m["word_recall"], m["word_precision"] = overlap(rw, ow)
+    m["char_recall"], m["char_precision"] = overlap(chars(ref_text), chars(out_text))
+    m["pre_share"] = sum(len(b[1]) for b in ep["blocks"] if b[0].endswith("pre")) / max(1, len(out_text))
+    m["pua"] = 10000 * sum(1 for c in out_text if 0xE000 <= ord(c) <= 0xF8FF or c == "\ufffd") / max(1, len(out_text))
+    m["missing_top"] = [w for w, _ in (rw - ow).most_common(15)]
+    m["extra_top"] = [w for w, _ in (ow - rw).most_common(15)]
+    # reading order / joining: reference shingles found in the EPUB
+    out_words = words(out_text)
+    out_sh = set(shingles(out_words))
+    found = total = found2 = total2 = 0
+    for p in pages:
+        sh = shingles(words(p["body"]))
+        hit = sum(1 for s in sh if s in out_sh)
+        found += hit
+        total += len(sh)
+        if p["twocol"]:
+            found2 += hit
+            total2 += len(sh)
+    m["order"] = found / total if total else None
+    m["order_2col"] = found2 / total2 if total2 else None
+    m["twocol_pages"] = sum(1 for p in pages if p["twocol"])
+    # paragraphs broken mid-sentence
+    paras = [(b[1].strip(), b[2]) for b in ep["blocks"] if b[0] == "p"]
+    breaks = 0
+    examples = []
+    for (a, ca), (b, cb) in zip(paras, paras[1:]):
+        if a and b and ca == cb and not a.endswith(TERMINAL) and a[-1].isalpha() and b[0].islower():
+            breaks += 1
+            if len(examples) < 5:
+                examples.append(f"…{a[-40:]} ¶ {b[:40]}…")
+    m["mid_breaks"] = 1000 * breaks / max(1, len(paras))
+    m["mid_break_examples"] = examples
+    m["paragraphs"] = len(paras)
+    # hyphenation
+    raw_ref = unicodedata.normalize("NFKC", "\n".join(p["body"] for p in pages)).replace("\x02", "-\n").lower()
+    midline = set(re.findall(r"\b(\w+-\w+)\b(?!\n)", re.sub(r"-\s*\n", "", raw_ref)))
+    midline = {c for c in midline if not re.search(r"\w-\n", c)}
+    raw_out = unicodedata.normalize("NFKC", out_text).lower()
+    out_vocab = collections.Counter(re.findall(r"\w+", raw_out))
+    left = len(re.findall(r"[^\W\d_]{2,}- [a-zà-ÿ]{2,}", raw_out))
+    joined_tokens = re.findall(r"\b([^\W\d_]+)-([^\W\d_]+)\b", raw_out)
+    left += sum(1 for a, b in joined_tokens if f"{a}-{b}" not in midline and out_vocab.get(a + b, 0) > 0)
+    glued = 0
+    for c in midline:
+        a, _, b = c.partition("-")
+        if a.isalpha() and b.isalpha() and out_vocab.get(a + b, 0) and (a + b) not in rw:
+            glued += out_vocab[a + b]
+    nw = max(1, len(out_words))
+    m["hyph_left"] = 10000 * left / nw
+    m["hyph_joined"] = 10000 * glued / nw
+    # header / footer / page number leakage
+    occ = collections.defaultdict(set)
+    raw_lines = collections.defaultdict(list)
+    for p in pages:
+        for pos, t in p["margin"]:
+            if not is_pnum(t) and sum(c.isalpha() for c in t) >= 4:
+                occ[margin_key(t)].add(p["pno"])
+                raw_lines[margin_key(t)].append(t)
+    running = {k: v for k, v in occ.items() if len(v) >= 3}
+    out_exact = re.sub(r"\s+", " ", norm(out_text))
+    out_norm = re.sub(r"\s+", " ", re.sub(r"\d+", "#", norm(out_text)))
+    body_norm = re.sub(r"\s+", " ", re.sub(r"\d+", "#", norm("\n".join(p["body"] for p in pages))))
+    leak = expected = 0
+    leak_examples = []
+    for k, pg in running.items():
+        expected += len(pg)
+        if "#" in k:  # heads carrying the page number: each printed form is unique, so any hit is a leak
+            excess = sum(1 for t in raw_lines[k] if re.sub(r"\s+", " ", norm(t)).strip() in out_exact)
+        else:
+            n_out, n_body = out_norm.count(k), body_norm.count(k)
+            excess = max(0, n_out - n_body - 1)  # one legitimate use (title page / chapter title) is allowed
+        leak += min(excess, len(pg))
+        if excess and len(leak_examples) < 5:
+            leak_examples.append(f"{k[:50]} ×{excess}")
+    m["hdr_leak"] = leak / expected if expected else None
+    m["hdr_leak_examples"] = leak_examples
+    m["running_lines"] = expected
+    folios = collections.Counter(t.strip().strip("-–—[]()·•. ").lower() for p in pages for _, t in p["margin"] if is_pnum(t))
+    alone = collections.Counter(b[1].strip().strip("-–—[]()·•. ").lower() for b in ep["blocks"]
+                                if b[0] in ("p", "h1", "h2", "h3", "h4") and is_pnum(b[1]))
+    standalone = sum(1 for k, c in alone.items() if folios.get(k) and c == 1)  # repeated numbers are formulae, not folios
+    seq = " ".join(out_words_with_digits(out_text))
+    pn_total = pn_leak = 0
+    for p in pages:
+        nums = [(pos, t.strip().strip("-–—[]()·•. ").lower()) for pos, t in p["margin"] if is_pnum(t)]
+        if not nums:
+            continue
+        pn_total += 1
+        bw = out_words_with_digits(p["body"])
+        if len(bw) < 4:
+            continue
+        for pos, n in nums:
+            probe = " ".join(bw[-3:] + [n]) if pos == "bottom" else " ".join([n] + bw[:3])
+            if probe in seq:
+                pn_leak += 1
+                break
+    m["pnum_leak"] = (pn_leak + standalone) / pn_total if pn_total else None
+    m["pnum_pages"] = pn_total
+    # structure
+    outline = ref["outline"]
+    m["outline"] = len(outline)
+    m["nav"] = len(ep["nav"])
+    m["chapters"] = ep["chapters"]
+    m["headings"] = sum(ep["headings"].values())
+    m["headings_per_page"] = m["headings"] / max(1, len(pages))
+    m["chapters_per_100p"] = 100 * ep["chapters"] / max(1, len(pages))
+    if outline:
+        navn = [re.sub(r"\W+", " ", norm(t)).strip() for t in ep["nav"]]
+        hit = 0
+        for o in outline:
+            t = re.sub(r"\W+", " ", norm(o["title"] or "")).strip()
+            if t and any(t[:40] in n or (n and n[:40] in t) for n in navn):
+                hit += 1
+        m["outline_match"] = hit / len(outline)
+    else:
+        m["outline_match"] = None
+    m["img_pdf"] = sum(p["images"] for p in pages)
+    m["img_epub"] = ep["images"]
+    return m
+
+
+def out_words_with_digits(text: str) -> list[str]:
+    return re.findall(r"\w+", norm(text))
+
+
+# ---------------------------------------------------------------- epubcheck
+
+def epubcheck(epub: Path, mode: str) -> int:
+    if mode == "off":
+        return -1
+    sys.path.insert(0, str(ROOT / "tests"))
+    import epubcheck as ec  # tests/epubcheck.py (pinned jar, cached in tests/.cache)
+
+    java_home = Path("/opt/homebrew/opt/openjdk@21/bin")
+    if java_home.exists() and str(java_home) not in os.environ["PATH"]:
+        os.environ["PATH"] = f"{java_home}:{os.environ['PATH']}"
+    if mode in ("auto", "java") and ec.java_available():
+        with tempfile.TemporaryDirectory() as tmp:
+            return len(ec.check(epub, Path(tmp)))
+    if mode in ("auto", "docker") and shutil.which("docker"):
+        cmd = ["docker", "run", "--rm", "-v", f"{epub.parent}:/w:ro", "--entrypoint", "python", "pdftoepub-test", "-c",
+               "import sys,pathlib,tempfile; sys.path.insert(0,'/src/tests'); import epubcheck as e; "
+               f"print('N=%d' % len(e.check(pathlib.Path('/w/{epub.name}'), pathlib.Path(tempfile.mkdtemp()))))"]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        hit = re.search(r"N=(\d+)", res.stdout)
+        return int(hit.group(1)) if hit else -1
+    return -1
+
+
+# ---------------------------------------------------------------- conversion worker
+
+def worker(pdf: str, epub: str, ocr: str, langs: str) -> None:
+    import pdftoepub
+
+    t0 = time.perf_counter()
+    try:
+        res = pdftoepub.convert(pdf, epub, pdftoepub.api.ConvertOptions(ocr=ocr, ocr_langs=langs))
+        out = {"ok": True, "pages": res.page_count, "chapters": res.chapter_count, "ocr_pages": res.ocr_pages, "warnings": res.warnings}
+    except Exception as e:  # noqa: BLE001
+        out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    out["seconds"] = time.perf_counter() - t0
+    print("RESULT " + json.dumps(out))
+
+
+def run_worker(doc: dict, pdf: Path, epub: Path, backend: str, timeout: int) -> dict:
+    env = dict(os.environ, PDFTOEPUB_BACKEND=backend)
+    cmd = [sys.executable, "-I", str(Path(__file__)), "--worker", str(pdf), str(epub), doc.get("ocr", "auto"), doc.get("ocr_langs", "fra+eng")]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    deadline = time.time() + timeout
+    rusage = None
+    while True:
+        pid, status, ru = os.wait4(proc.pid, os.WNOHANG)
+        if pid:
+            rusage = ru
+            break
+        if time.time() > deadline:
+            proc.kill()
+            os.wait4(proc.pid, 0)
+            return {"ok": False, "error": f"timeout after {timeout}s"}
+        time.sleep(0.2)
+    stdout = proc.stdout.read()
+    stderr = proc.stderr.read()
+    line = next((l for l in stdout.splitlines() if l.startswith("RESULT ")), None)
+    res = json.loads(line[7:]) if line else {"ok": False, "error": (stderr or "worker crashed")[-500:]}
+    rss = rusage.ru_maxrss / (1 << 20 if sys.platform == "darwin" else 1 << 10)
+    res["rss_mb"] = round(rss, 1)
+    return res
+
+
+# ---------------------------------------------------------------- report
+
+HEAD = ["doc", "backend", "pages", "word_recall", "word_precision", "char_recall", "pre_share", "pua", "order", "order_2col", "mid_breaks",
+        "hyph_left", "hyph_joined", "hdr_leak", "pnum_leak", "outline", "nav", "chapters", "headings", "outline_match",
+        "headings_per_page", "chapters_per_100p", "img_pdf", "img_epub", "epubcheck", "s_per_page", "rss_mb"]
+
+
+def fmt(v) -> str:
+    if v is None:
+        return "–"
+    if isinstance(v, float):
+        return f"{v:.3f}" if abs(v) < 10 else f"{v:.1f}"
+    return str(v)
+
+
+def table(rows: list[dict], cols: list[str]) -> str:
+    lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
+    for r in rows:
+        lines.append("| " + " | ".join(fmt(r.get(c)) for c in cols) + " |")
+    return "\n".join(lines)
+
+
+def summarise(rows: list[dict]) -> dict:
+    """Means over successful rows, per backend."""
+    agg = {}
+    for be in sorted({r["backend"] for r in rows}):
+        rs = [r for r in rows if r["backend"] == be and r.get("ok")]
+        s = {"doc": "MEAN", "backend": be, "pages": sum(r["pages"] for r in rs)}
+        for c in HEAD[3:]:
+            vals = [r[c] for r in rs if isinstance(r.get(c), (int, float)) and r.get(c) is not None and r.get(c) != -1]
+            s[c] = sum(vals) / len(vals) if vals else None
+        s["s_per_page"] = sum(r["seconds"] for r in rs) / max(1, s["pages"])
+        s["rss_mb"] = max((r["rss_mb"] for r in rs), default=None)
+        s["failed"] = sum(1 for r in rows if r["backend"] == be and not r.get("ok"))
+        agg[be] = s
+    return agg
+
+
+def write_report(label: str, rows: list[dict]) -> Path:
+    d = OUT / label
+    agg = summarise(rows)
+    md = [f"# Corpus evaluation `{label}`", "", table(rows + list(agg.values()), HEAD), ""]
+    md.append("## Details")
+    for r in rows:
+        md.append(f"### {r['doc']} / {r['backend']}")
+        if not r.get("ok"):
+            md.append(f"FAILED: {r.get('error')}")
+            continue
+        md.append(f"- warnings ({len(r.get('warnings', []))}): {'; '.join(r.get('warnings', [])[:5])}")
+        md.append(f"- missing (most frequent): {', '.join(r.get('missing_top', []))}")
+        md.append(f"- extra (most frequent): {', '.join(r.get('extra_top', []))}")
+        if r.get("mid_break_examples"):
+            md.append("- mid-sentence breaks: " + " | ".join(r["mid_break_examples"]))
+        if r.get("hdr_leak_examples"):
+            md.append("- header leaks: " + " | ".join(r["hdr_leak_examples"]))
+    (d / "report.md").write_text("\n".join(md) + "\n")
+    return d / "report.md"
+
+
+def compare(a: str, b: str) -> str:
+    ra = json.loads((OUT / a / "results.json").read_text())
+    rb = json.loads((OUT / b / "results.json").read_text())
+    cols = ["word_recall", "word_precision", "char_recall", "pre_share", "pua", "order", "order_2col", "mid_breaks", "hyph_left", "hyph_joined",
+            "hdr_leak", "pnum_leak", "outline_match", "img_epub", "epubcheck", "s_per_page", "rss_mb"]
+    out = []
+    sa, sb = summarise(ra), summarise(rb)
+    out.append("| backend | metric | " + a + " | " + b + " |")
+    out.append("|---|---|---|---|")
+    for be in sorted(set(sa) | set(sb)):
+        for c in cols:
+            out.append(f"| {be} | {c} | {fmt(sa.get(be, {}).get(c))} | {fmt(sb.get(be, {}).get(c))} |")
+    out.append("")
+    out.append("| doc | backend | " + " | ".join(f"{c} {a}→{b}" for c in ("word_recall", "order", "mid_breaks", "hyph_left", "hdr_leak", "pnum_leak")) + " |")
+    out.append("|---|---|" + "---|" * 6)
+    idx = {(r["doc"], r["backend"]): r for r in ra}
+    for r in rb:
+        o = idx.get((r["doc"], r["backend"]), {})
+        cells = [f"{fmt(o.get(c))}→{fmt(r.get(c))}" for c in ("word_recall", "order", "mid_breaks", "hyph_left", "hdr_leak", "pnum_leak")]
+        out.append(f"| {r['doc']} | {r['backend']} | " + " | ".join(cells) + " |")
+    return "\n".join(out)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--label", default="latest")
+    ap.add_argument("--ids", nargs="*")
+    ap.add_argument("--backends", default=None, help="comma list (default: pdfminer + pymupdf when installed)")
+    ap.add_argument("--epubcheck", default="auto", choices=["auto", "java", "docker", "off"])
+    ap.add_argument("--timeout", type=int, default=1800, help="per conversion, seconds")
+    ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
+    ap.add_argument("--rescore", action="store_true", help="recompute metrics from the label's existing EPUBs (no conversion)")
+    ap.add_argument("--worker", nargs=4, help=argparse.SUPPRESS)
+    args = ap.parse_args(argv)
+    if args.worker:
+        worker(*args.worker)
+        return 0
+    if args.compare:
+        print(compare(*args.compare))
+        return 0
+    import importlib.util
+
+    backends = args.backends.split(",") if args.backends else ["pdfminer"] + (["pymupdf"] if importlib.util.find_spec("pymupdf") else [])
+    manifest = json.loads((HERE / "manifest.json").read_text())
+    docs = [d for d in manifest["documents"] if not args.ids or d["id"] in args.ids]
+    by_id = {d["id"]: d for d in manifest["documents"]}
+    d_out = OUT / args.label
+    d_out.mkdir(parents=True, exist_ok=True)
+    ref_cache = OUT / "reference"
+    ref_cache.mkdir(parents=True, exist_ok=True)
+    results_path = d_out / "results.json"
+    rows = json.loads(results_path.read_text()) if results_path.exists() else []
+    for doc in docs:
+        pdf = CORPUS / f"{doc['id']}.pdf"
+        if not pdf.exists():
+            print(f"skip {doc['id']}: not fetched (run fetch.py)")
+            continue
+        rc = ref_cache / f"{doc['id']}.json"
+        if rc.exists() and rc.stat().st_mtime > max(pdf.stat().st_mtime, Path(__file__).stat().st_mtime):
+            ref = json.loads(rc.read_text())
+        else:
+            if "derive" in doc:
+                ref = reference(CORPUS / f"{by_id[doc['derive']['from']]['id']}.pdf", doc["derive"]["pages"])
+            else:
+                ref = reference(pdf)
+            rc.write_text(json.dumps(ref))
+        for be in backends:
+            epub = d_out / f"{doc['id']}.{be}.epub"
+            print(f"{doc['id']:<28} {be:<9}", end=" ", flush=True)
+            if args.rescore:
+                old = next((r for r in rows if (r["doc"], r["backend"]) == (doc["id"], be)), None)
+                if old is None or not old.get("ok") or not epub.exists():
+                    print("no previous result")
+                    continue
+                res = {k: old[k] for k in ("ok", "pages", "chapters", "ocr_pages", "warnings", "seconds", "rss_mb")}
+            else:
+                res = run_worker(doc, pdf, epub, be, args.timeout)
+            row = {"doc": doc["id"], "backend": be, **res}
+            if res.get("ok"):
+                row.update(metrics(ref, read_epub(epub)))
+                row["epubcheck"] = old.get("epubcheck", -1) if args.rescore else epubcheck(epub, args.epubcheck)
+                row["s_per_page"] = res["seconds"] / max(1, res["pages"])
+                print(f"ok {res['seconds']:.1f}s rss={res['rss_mb']}MB recall={row['word_recall']:.3f} order={fmt(row['order'])} "
+                      f"breaks={row['mid_breaks']:.1f} hdr={fmt(row['hdr_leak'])} pnum={fmt(row['pnum_leak'])} epubcheck={row['epubcheck']}")
+            else:
+                print(f"FAILED {res.get('error')}")
+            rows = [r for r in rows if (r["doc"], r["backend"]) != (doc["id"], be)] + [row]
+            order = {d["id"]: i for i, d in enumerate(manifest["documents"])}
+            rows.sort(key=lambda r: (order.get(r["doc"], 999), r["backend"]))
+            results_path.write_text(json.dumps(rows, indent=1, ensure_ascii=False))
+    print(f"report: {write_report(args.label, rows)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

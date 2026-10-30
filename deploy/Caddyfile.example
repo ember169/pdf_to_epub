@@ -1,0 +1,11 @@
+# Public hosting: Caddy terminates TLS and proxies to the container.
+# Set AUTH_TOKEN in the environment (docker compose) so the API requires a bearer token.
+# Also bind the container to localhost only ("127.0.0.1:8000:8000").
+pdf.example.com {
+	request_body {
+		max_size 105MB   # slightly above MAX_UPLOAD_MB
+	}
+	reverse_proxy 127.0.0.1:8000 {
+		flush_interval -1   # do not buffer SSE progress streams
+	}
+}

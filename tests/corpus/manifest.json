@@ -1,0 +1,333 @@
+{
+  "about": "Real-world evaluation corpus. Public-domain / openly licensed PDFs from arXiv, Project Gutenberg and the Internet Archive only. Files live in tests/.corpus/ (git-ignored, never committed); fetch with `python tests/corpus/fetch.py`. Entries with `derive` are built locally from another entry (image-only excerpts for OCR) and are checked against `sha256` only as a warning, since JPEG encoding can differ between Pillow builds.",
+  "documents": [
+    {
+      "id": "fr-novel-roi-montagnes",
+      "source": "Internet Archive (Bibebook edition)",
+      "url": "https://archive.org/download/about_edmond_-_le_roi_des_montagnes/about_edmond_-_le_roi_des_montagnes.pdf",
+      "licence": "CC BY-SA 4.0 (Bibebook edition of a public-domain text, Edmond About 1857)",
+      "lang": "fr",
+      "ocr": "off",
+      "features": [
+        "novel",
+        "french",
+        "dialogue",
+        "italics",
+        "outline"
+      ],
+      "notes": "Born-digital French novel: accents, guillemets, em-dash dialogue, italic words, running headers.",
+      "sha256": "d60fc6b942564e5770fe045140a402286a82d4073185de5db5cd59087c7aff3b"
+    },
+    {
+      "id": "fr-novel-glebe",
+      "source": "Internet Archive (Bibebook edition)",
+      "url": "https://archive.org/download/adam_paul_-_la_glebe/adam_paul_-_la_glebe.pdf",
+      "licence": "CC BY-SA 4.0 (Bibebook edition of a public-domain text, Paul Adam 1887)",
+      "lang": "fr",
+      "ocr": "off",
+      "features": [
+        "novel",
+        "french",
+        "dialogue"
+      ],
+      "notes": "Second born-digital French novel (same publisher template, short).",
+      "sha256": "29784cee51588cce487a15a89183d7259f2172ee0f658452866b1c8abd4f0745"
+    },
+    {
+      "id": "fr-novel-chignole",
+      "source": "Project Gutenberg #35150",
+      "url": "https://www.gutenberg.org/cache/epub/35150/pg35150-images.pdf",
+      "licence": "Public domain in the USA (Project Gutenberg licence)",
+      "lang": "fr",
+      "ocr": "off",
+      "features": [
+        "novel",
+        "french",
+        "dialogue",
+        "generated-pdf"
+      ],
+      "notes": "Gutenberg's HTML-to-PDF rendering of a 1919 French novel; different typesetting chain than LaTeX.",
+      "sha256": "55f8a690d3941741b3eac9548358e0f65a29b8c9082b6f814933fd9e865ab314"
+    },
+    {
+      "id": "en-novel-my-antonia",
+      "source": "Project Gutenberg #19810",
+      "url": "https://www.gutenberg.org/files/19810/19810-pdf.pdf",
+      "licence": "Public domain in the USA (Project Gutenberg licence)",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "novel",
+        "english",
+        "dialogue",
+        "italics",
+        "accents",
+        "outline"
+      ],
+      "notes": "Willa Cather 1918, producer-made PDF: dialogue, italics, accented names (Ántonia).",
+      "sha256": "b6e9c01102f45473954b11d47c22d9875f6b63c4b7a3de1a8c9cbe1a301b5d26"
+    },
+    {
+      "id": "en-novel-puck",
+      "source": "Project Gutenberg #26027",
+      "url": "https://www.gutenberg.org/files/26027/26027-pdf.pdf",
+      "licence": "Public domain in the USA (Project Gutenberg licence)",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "novel",
+        "english",
+        "poems",
+        "illustrations"
+      ],
+      "notes": "Kipling 1906, interleaved verse and prose, illustrations.",
+      "sha256": "a7bf66cbfd55a14f562dc1d7e5953d6433ee259bf3d0e8a9c7aeaa598841f34a"
+    },
+    {
+      "id": "arxiv-llama",
+      "source": "arXiv:2302.13971v1",
+      "url": "https://arxiv.org/pdf/2302.13971v1",
+      "licence": "CC BY 4.0",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "paper",
+        "two-column",
+        "tables",
+        "figures",
+        "footnotes",
+        "ligatures",
+        "outline"
+      ],
+      "notes": "Two-column ACL-style paper with many tables, plots and footnotes.",
+      "sha256": "2e663675ae36ad12adb2f5a05281bac2747ecf8d23d92bedd9f937a89fee7136"
+    },
+    {
+      "id": "arxiv-ligo",
+      "source": "arXiv:1602.03837v1",
+      "url": "https://arxiv.org/pdf/1602.03837v1",
+      "licence": "CC BY 4.0",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "paper",
+        "two-column",
+        "math",
+        "figures",
+        "footnotes",
+        "long-author-list"
+      ],
+      "notes": "RevTeX (PRL) two-column paper: inline/display math, figures, a very long author/affiliation list.",
+      "sha256": "e5e864c23d015b69be17e5b5d51b5b462d2829353a867513414b6728f54589c4"
+    },
+    {
+      "id": "arxiv-mistral",
+      "source": "arXiv:2310.06825v1",
+      "url": "https://arxiv.org/pdf/2310.06825v1",
+      "licence": "CC BY 4.0",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "paper",
+        "figures",
+        "tables",
+        "code"
+      ],
+      "notes": "Short single-column paper with figures, tables and a prompt/code listing.",
+      "sha256": "dfbac4e7035344b305c947481f2e7e8a02f7a24a563917eb6e47f6591d14c5ae"
+    },
+    {
+      "id": "arxiv-foundation-models",
+      "source": "arXiv:2108.07258v3",
+      "url": "https://arxiv.org/pdf/2108.07258v3",
+      "licence": "CC BY 4.0",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "report",
+        "numbered-headings",
+        "lists",
+        "footnotes",
+        "figures",
+        "outline",
+        "long"
+      ],
+      "notes": "200+ page report: numbered sections (1.1, 2.3.4), bullet lists, many footnotes, deep outline.",
+      "sha256": "05e867e3c710a3b0c0e13eb372d013c3511f2ee114bace5ca5c402d6341e92dd"
+    },
+    {
+      "id": "arxiv-d2l",
+      "source": "arXiv:2106.11342v5",
+      "url": "https://arxiv.org/pdf/2106.11342v5",
+      "licence": "CC BY-SA 4.0",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "textbook",
+        "numbered-headings",
+        "lists",
+        "code",
+        "math",
+        "figures",
+        "tables",
+        "outline",
+        "very-long"
+      ],
+      "notes": "Dive into Deep Learning: 1000+ page textbook with code listings; used for performance / memory.",
+      "sha256": "93316e525a034cfa935023c3c31196c86f5edfd0e056f50f09676f6364a0be56"
+    },
+    {
+      "id": "pg-calculus-made-easy",
+      "source": "Project Gutenberg #33283",
+      "url": "https://www.gutenberg.org/files/33283/33283-pdf.pdf",
+      "licence": "Public domain in the USA (Project Gutenberg licence)",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "textbook",
+        "math",
+        "numbered-chapters",
+        "ligatures",
+        "outline"
+      ],
+      "notes": "LaTeX-typeset textbook (Thompson 1914): math, exercises, Computer Modern ligatures.",
+      "sha256": "0a6957ae86625bbabcb71e070ef32e5dc7197cebb8bf90f0275caab45e71baf6"
+    },
+    {
+      "id": "pg-descartes-geometrie",
+      "source": "Project Gutenberg #26400",
+      "url": "https://www.gutenberg.org/files/26400/26400-pdf.pdf",
+      "licence": "Public domain in the USA (Project Gutenberg licence)",
+      "lang": "fr",
+      "ocr": "off",
+      "features": [
+        "french",
+        "math",
+        "old-typography",
+        "ligatures",
+        "figures"
+      ],
+      "notes": "Descartes 1637 with period spelling, ligatures and figures, LaTeX-typeset.",
+      "sha256": "dcce2fa7aeb859579b324fc736a6394fbd9b24fc9938b4227bb8e6d3ca30d228"
+    },
+    {
+      "id": "pg-galois",
+      "source": "Project Gutenberg #40213",
+      "url": "https://www.gutenberg.org/files/40213/40213-pdf.pdf",
+      "licence": "Public domain in the USA (Project Gutenberg licence)",
+      "lang": "fr",
+      "ocr": "off",
+      "features": [
+        "french",
+        "math",
+        "footnotes",
+        "outline",
+        "ligatures"
+      ],
+      "notes": "Galois' collected works: French math, footnotes, Œ ligature.",
+      "sha256": "524bc34b315d6f5709531811ede249fa80b16c0ae77f96c2dffd937ce7be95b6"
+    },
+    {
+      "id": "ia-zola-roman-experimental",
+      "source": "Internet Archive leromanexprime00zola",
+      "url": "https://archive.org/download/leromanexprime00zola/leromanexprime00zola.pdf",
+      "licence": "Public domain (Zola, d. 1902; 1902 edition)",
+      "lang": "fr",
+      "ocr": "off",
+      "features": [
+        "scan",
+        "ocr-text-layer",
+        "french",
+        "long",
+        "running-headers"
+      ],
+      "notes": "438-page scan with IA's OCR text layer (invisible text over page images).",
+      "sha256": "39fa77945a3841fa08eec90381ae07978e7f46fa182db7fe48b9ab539ed83af8"
+    },
+    {
+      "id": "ia-island-plant",
+      "source": "Internet Archive islandplantnantu00leem",
+      "url": "https://archive.org/download/islandplantnantu00leem/islandplantnantu00leem.pdf",
+      "licence": "Public domain (published 1896)",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "scan",
+        "ocr-text-layer",
+        "english",
+        "novel"
+      ],
+      "notes": "English novella scan with OCR text layer.",
+      "sha256": "fd97527812aa5310fdc656cebc49ddb2c8160ec195bd0fcc3c5198ec7c20d5cc"
+    },
+    {
+      "id": "ia-innkeeper-source",
+      "source": "Internet Archive innkeeperstale00burr",
+      "url": "https://archive.org/download/innkeeperstale00burr/innkeeperstale00burr.pdf",
+      "licence": "Public domain (published 1900)",
+      "lang": "en",
+      "ocr": "off",
+      "features": [
+        "scan",
+        "ocr-text-layer",
+        "english",
+        "short"
+      ],
+      "notes": "18-page scan; also the source of the image-only excerpt below.",
+      "sha256": "26a43518014fc61c5ded45787e96fa80c7fba3a78b053039bb11f20dd8cd5f81"
+    },
+    {
+      "id": "scan-only-en",
+      "source": "derived from ia-innkeeper-source",
+      "derive": {
+        "from": "ia-innkeeper-source",
+        "pages": [
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "dpi": 200
+      },
+      "licence": "Public domain (published 1900)",
+      "lang": "en",
+      "ocr": "auto",
+      "ocr_langs": "eng",
+      "features": [
+        "scan",
+        "image-only",
+        "ocr"
+      ],
+      "notes": "Pages rasterised to JPEG and rewrapped: no text layer at all, so OCR is the only way to get text.",
+      "sha256": "2050142f280a54b848671c011dd7428e60b394e7013bd58cec935dd2478d2aed"
+    },
+    {
+      "id": "scan-only-fr",
+      "source": "derived from ia-zola-roman-experimental",
+      "derive": {
+        "from": "ia-zola-roman-experimental",
+        "pages": [
+          15,
+          16,
+          17,
+          18
+        ],
+        "dpi": 200
+      },
+      "licence": "Public domain (Zola, d. 1902; 1902 edition)",
+      "lang": "fr",
+      "ocr": "auto",
+      "ocr_langs": "fra",
+      "features": [
+        "scan",
+        "image-only",
+        "ocr",
+        "french"
+      ],
+      "notes": "French image-only excerpt for OCR with accents.",
+      "sha256": "b28fccb04c2733c54f53d0146f51b2e11924f5a3cfd7ab60bf8eac1ede7557e5"
+    }
+  ]
+}

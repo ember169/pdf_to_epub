@@ -1,0 +1,50 @@
+# EXPERIMENTAL: builds pdftoepub-windows-x86_64.exe with Wine inside Docker (linux/amd64).
+#   docker build --platform linux/amd64 -f packaging/Dockerfile.windows --target out --output type=local,dest=DIR .
+# Pinned inputs (sha256-verified): CPython 3.12.10 from the official nuget.org "python" package, Tesseract 5.4.0
+# (UB-Mannheim official GitHub release installer, unpacked with 7z - never executed), tessdata_fast eng/fra.
+FROM --platform=linux/amd64 debian:bookworm-slim AS base
+ENV DEBIAN_FRONTEND=noninteractive WINEDEBUG=-all WINEPREFIX=/wine WINEARCH=win64
+RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
+      wine wine64 wine32 libwine libwine:i386 gcc-mingw-w64-x86-64 p7zip-full curl ca-certificates unzip xvfb xauth \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL -o /py.nupkg https://api.nuget.org/v3-flatcontainer/python/3.12.10/python.3.12.10.nupkg \
+ && echo "0eb85c2dfccccf1b17352de4c397f69194035b7d37149eacc16f1147d93de3b8  /py.nupkg" | sha256sum -c - \
+ && unzip -q /py.nupkg -d /pynuget && ls /pynuget/tools | head -3
+RUN curl -fsSL -o /tess-setup.exe https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe \
+ && echo "c885fff6998e0608ba4bb8ab51436e1c6775c2bafc2559a19b423e18678b60c9  /tess-setup.exe" | sha256sum -c - \
+ && 7z x -y -o/tess-raw /tess-setup.exe >/dev/null && ls /tess-raw | head -20
+RUN mkdir -p /tess/tessdata && cd /tess-raw && cp tesseract.exe *.dll /tess/ && cp -r tessdata/configs tessdata/tessconfigs /tess/tessdata/ \
+ && ls /tess | head -40
+# the UB-Mannheim DLLs ship with debug info (libtesseract is 100 MB); stripping saves ~95 MB
+RUN x86_64-w64-mingw32-strip --strip-unneeded /tess/*.dll /tess/*.exe && du -sh /tess
+COPY packaging/tessdata/eng.traineddata packaging/tessdata/fra.traineddata packaging/tessdata/SHA256SUMS /tess/tessdata/
+RUN cd /tess/tessdata && sha256sum -c SHA256SUMS && rm SHA256SUMS
+# Python 3.12 platform.py queries WMI via _wmi.pyd; Wine lacks propsys.VariantToString and aborts. Without _wmi it falls back.
+RUN rm -f /pynuget/tools/DLLs/_wmi.pyd
+RUN wineboot --init 2>&1 | tail -2; wine /pynuget/tools/python.exe --version
+COPY packaging/wine_bcryptprimitives.c /tmp/
+RUN x86_64-w64-mingw32-gcc -shared -o /wine/drive_c/windows/system32/bcryptprimitives.dll /tmp/wine_bcryptprimitives.c -lbcrypt \
+ && WINEDLLOVERRIDES= wine python.exe --version 2>/dev/null; true
+ENV WINEDLLOVERRIDES="bcryptprimitives=n,b"
+
+FROM base AS build
+WORKDIR /src
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY packaging/entry.py packaging/pdftoepub.spec packaging/gen_licenses.py packaging/windows-requirements.txt packaging/build-backend.lock packaging/
+# pip itself crashes under Wine 8 (unimplemented propsys.VariantToString), so resolve+download Windows wheels with a
+# Linux pip (versions pinned by `uv pip compile --python-platform x86_64-pc-windows-msvc`, see windows-requirements.txt) and unpack them straight into the Windows Python's site-packages.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /hostpip && /hostpip/bin/pip install -q --require-hashes --no-deps -r packaging/build-backend.lock \
+ && /hostpip/bin/pip wheel -q --no-deps --no-build-isolation --ignore-requires-python -w /wheels . \
+ && /hostpip/bin/pip download -q -d /wheels --platform win_amd64 --python-version 3.12 --implementation cp --abi cp312 \
+      --only-binary=:all: --no-deps -r packaging/windows-requirements.txt \
+ && for w in /wheels/*.whl; do unzip -q -o "$w" -d /pynuget/tools/Lib/site-packages; done \
+ && ls /pynuget/tools/Lib/site-packages | head -50
+RUN wine /pynuget/tools/python.exe packaging/gen_licenses.py Z:/THIRD_PARTY_LICENSES --tesseract
+RUN cd packaging && TESS_DIR='Z:\tess' LICENSES_FILE='Z:\THIRD_PARTY_LICENSES' WINEPATH= \
+    wine /pynuget/tools/python.exe -m PyInstaller --noconfirm --clean --distpath Z:/out --workpath Z:/tmp/w pdftoepub.spec || true
+
+FROM scratch AS out
+COPY --from=build /out/pdftoepub.exe /pdftoepub.exe
+COPY --from=build /THIRD_PARTY_LICENSES /THIRD_PARTY_LICENSES

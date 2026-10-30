@@ -1,0 +1,44 @@
+# Linux binary build (used by packaging/build.sh):
+#   docker build --platform linux/<arch> -f packaging/Dockerfile.linux --target out --output type=local,dest=DIR .
+# bullseye = glibc 2.31, so the binary runs on Debian 11 / Ubuntu 20.04 and newer.
+FROM python:3.12-slim-bullseye AS build
+# bullseye is EOL: its repositories now live on archive.debian.org
+RUN printf 'deb http://archive.debian.org/debian bullseye main\ndeb http://archive.debian.org/debian-security bullseye-security main\n' > /etc/apt/sources.list \
+    && echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archive \
+    && apt-get update && apt-get install -y --no-install-recommends binutils patchelf tesseract-ocr file \
+    && rm -rf /var/lib/apt/lists/*
+
+# Collect tesseract + every non-glibc shared library it needs, relocatable via RPATH=$ORIGIN
+RUN set -e; mkdir -p /tess/tessdata; cp "$(command -v tesseract)" /tess/tesseract; \
+    ldd /tess/tesseract | awk '/=> \// {print $3}' \
+      | grep -v -E '/(libc|libm|libdl|libpthread|librt|libresolv|libutil|libnsl|ld-linux[^/]*)\.so' \
+      | while read -r l; do cp -L "$l" /tess/; done; \
+    for f in /tess/*; do [ -f "$f" ] && patchelf --force-rpath --set-rpath '$ORIGIN' "$f"; done; \
+    /tess/tesseract --version 2>&1 | head -1
+# config files such as "tsv" (used by the OCR code) live in tessdata/configs
+RUN cp -r /usr/share/tesseract-ocr/*/tessdata/configs /usr/share/tesseract-ocr/*/tessdata/tessconfigs /tess/tessdata/ && ls /tess/tessdata
+COPY packaging/tessdata/eng.traineddata packaging/tessdata/fra.traineddata packaging/tessdata/SHA256SUMS /tess/tessdata/
+RUN cd /tess/tessdata && sha256sum -c SHA256SUMS && rm SHA256SUMS
+# Report the minimum glibc the bundle needs
+RUN for f in /tess/tesseract /tess/*.so*; do objdump -T "$f" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' ; done | sort -uV | tail -1 | tee /tess/.glibc_min >&2
+
+WORKDIR /src
+COPY requirements.lock ./
+COPY packaging/build.lock packaging/build-backend.lock packaging/
+RUN python -m venv /venv && /venv/bin/pip install -q --require-hashes --no-deps -r requirements.lock -r packaging/build.lock -r packaging/build-backend.lock
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY packaging/entry.py packaging/pdftoepub.spec packaging/gen_licenses.py packaging/
+RUN /venv/bin/pip install -q --no-deps --no-build-isolation .
+RUN /venv/bin/python packaging/gen_licenses.py /THIRD_PARTY_LICENSES --tesseract
+RUN cd packaging && TESS_DIR=/tess LICENSES_FILE=/THIRD_PARTY_LICENSES /venv/bin/pyinstaller --noconfirm --clean \
+      --distpath /out --workpath /tmp/w pdftoepub.spec
+RUN /venv/bin/pyi-archive_viewer -l -r /out/pdftoepub | tee /tmp/list | wc -l \
+ && ! grep -i -E "pymupdf|fitz" /tmp/list
+RUN objdump -T /out/pdftoepub | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 | tee /out/.glibc_bootloader >&2
+
+FROM scratch AS out
+COPY --from=build /out/pdftoepub /pdftoepub
+COPY --from=build /THIRD_PARTY_LICENSES /THIRD_PARTY_LICENSES
+COPY --from=build /tess/.glibc_min /glibc_tess_min
+COPY --from=build /out/.glibc_bootloader /glibc_bootloader_min

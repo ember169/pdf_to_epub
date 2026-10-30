@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>PDF → EPUB</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath d='M10 8h9a3 3 0 0 1 3 3v13H13a3 3 0 0 1-3-3z' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#drop" data-i18n="skip"></a>
+<div class="wrap">
+  <header>
+    <div class="topbar">
+      <label class="lang"><span class="sr" data-i18n="language"></span>
+        <select id="lang"></select></label>
+    </div>
+    <h1>PDF <span class="arrow">→</span> EPUB</h1>
+    <p class="lead" data-i18n="tagline"></p>
+  </header>
+
+  <main>
+    <section id="auth" class="card" hidden aria-labelledby="auth-h">
+      <h2 id="auth-h" data-i18n="tokenTitle"></h2>
+      <p class="hint" data-i18n="tokenHelp"></p>
+      <div class="row">
+        <label class="grow"><span data-i18n="token"></span><input id="token" type="password" autocomplete="off"></label>
+        <button id="token-save" class="btn" data-i18n="save"></button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="add-h">
+      <h2 id="add-h" data-i18n="step1"></h2>
+      <button type="button" id="drop" aria-describedby="drop-hint">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m0 0L7 9m5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+        <strong data-i18n="drop"></strong>
+        <span id="drop-hint" class="hint" data-i18n="dropHint"></span>
+      </button>
+      <input id="file" type="file" accept="application/pdf,.pdf" multiple hidden>
+
+      <details id="opts">
+        <summary data-i18n="options"></summary>
+        <p class="hint" data-i18n="optionsIntro"></p>
+        <div class="grid">
+          <div class="field">
+            <label for="o-ocr" data-i18n="ocr"></label>
+            <select id="o-ocr" aria-describedby="h-ocr">
+              <option value="auto" data-i18n="ocrAuto"></option>
+              <option value="off" data-i18n="ocrOff"></option>
+              <option value="force" data-i18n="ocrForce"></option>
+            </select>
+            <p id="h-ocr" class="hint" data-i18n="ocrHelp"></p>
+          </div>
+          <div class="field">
+            <label for="o-langs" data-i18n="ocrLangs"></label>
+            <input id="o-langs" value="fra+eng" spellcheck="false" autocomplete="off" aria-describedby="h-langs">
+            <p id="h-langs" class="hint" data-i18n="ocrLangsHelp"></p>
+          </div>
+          <div class="field">
+            <label for="o-title" data-i18n="title"></label>
+            <input id="o-title" maxlength="300" aria-describedby="h-title">
+            <p id="h-title" class="hint" data-i18n="titleHelp"></p>
+          </div>
+          <div class="field">
+            <label for="o-author" data-i18n="author"></label>
+            <input id="o-author" maxlength="300" aria-describedby="h-author">
+            <p id="h-author" class="hint" data-i18n="authorHelp"></p>
+          </div>
+          <div class="field check">
+            <label><input id="o-hf" type="checkbox" checked><span data-i18n="hf"></span></label>
+            <p class="hint" data-i18n="hfHelp"></p>
+          </div>
+          <div class="field check">
+            <label><input id="o-cols" type="checkbox" checked><span data-i18n="cols"></span></label>
+            <p class="hint" data-i18n="colsHelp"></p>
+          </div>
+          <div class="field check">
+            <label><input id="o-img" type="checkbox" checked><span data-i18n="img"></span></label>
+            <p class="hint" data-i18n="imgHelp"></p>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <section class="card" id="queue-card" aria-labelledby="q-h" hidden>
+      <h2 id="q-h" data-i18n="step2"></h2>
+      <ul id="queue" class="queue"></ul>
+      <div class="row actions">
+        <button id="go" type="button" class="btn primary" data-i18n="convert"></button>
+        <button id="zip" type="button" class="btn" hidden data-i18n="downloadAll"></button>
+        <button id="clear" type="button" class="btn quiet" data-i18n="clear"></button>
+      </div>
+    </section>
+
+    <p id="live" class="sr" role="status" aria-live="polite"></p>
+  </main>
+
+  <footer class="hint" data-i18n="footer"></footer>
+</div>
+
+<div id="preview" class="overlay" hidden>
+  <div class="pv-box" role="dialog" aria-modal="true" aria-labelledby="pv-title">
+    <div class="pv-head">
+      <h2 id="pv-title"></h2>
+      <button id="pv-close" type="button" class="btn" data-i18n="close"></button>
+    </div>
+    <p id="pv-msg" class="hint" role="status"></p>
+  </div>
+</div>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

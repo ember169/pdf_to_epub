@@ -1,0 +1,10 @@
+.venv
+.git
+**/__pycache__
+*.pyc
+.pytest_cache
+tests/.cache
+tests/fixtures/out
+data
+tests/.corpus
+tests/corpus/out
