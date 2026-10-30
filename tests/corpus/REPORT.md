@@ -59,6 +59,486 @@ Caveats: on the math books (Calculus, Galois, Descartes) numbers inside formulas
 display formulas count as "breaks". The French OCR excerpt is compared against another OCR engine (IA's), which is not
 ground truth.
 
+## Round 5: a real scanned book (collective volume, ABBYY OCR layer)
+
+The test case is a 420-page French collective volume, scanned with an invisible ABBYY FineReader 10 text layer. It is
+copyrighted and the user's own copy, so it is **local only** (listed only in the git-ignored `tests/.corpus/private/manifest.json`,
+sha256 only, no URL; `fetch.py` skips it and says where to place it; `evaluate.py` includes it when present). Its
+hand-checked ground truth sits next to the PDF, git-ignored (`gt_file`). It was read from the page images:
+* 21 units (4 parts, the Introduction, 15 numbered chapters, the Épilogue) with their authors, sections and printed pages;
+* printed page = PDF page + 2, checked on 22 pages;
+* endnote counts for three chapters;
+* the blank and part-divider pages;
+* the title, editors, publisher, year and ISBN.
+
+The report gives numbers only, no text from the book. Unit tests use synthetic PDFs.
+
+"Before" is `main` at ba5e2be (`--src`), "after" this working tree, both scored by the same evaluator (all 18 public
+documents and the book, both backends, epubcheck on):
+
+```
+git archive ba5e2be src | tar -x -C /tmp/main
+python tests/corpus/evaluate.py --label r5-before --src /tmp/main/src
+python tests/corpus/evaluate.py --label r5-after
+```
+
+New metrics (`evaluate.py`):
+* `lspaced`: letter-spaced runs, per 10k words.
+* `glued`: glued words (two reference words as one, or camelCase), per 10k words.
+* `noterefs`, `sup_unlinked` and `note_items`: linked note references, superscript numbers left unlinked, and notes.
+* `junk_imgs`: blank, uniform, specks-only or black pictures.
+* `lower_starts`: paragraphs and quotes starting in lower case after another one, per 1000.
+* `pagelist`: page-list entries per PDF page.
+* With a private ground truth: `spine_units` (units opening a spine document), `spine_docs`, `nav_recall`,
+  `nav_precision` and `title_ok`.
+
+### The book, before → after
+
+| metric | pdfminer | pymupdf |
+|---|---|---|
+| word_recall | **0.975 → 0.976** | **0.980 → 0.976** |
+| order | **0.951 → 0.979** | **0.972 → 0.979** |
+| lspaced | **84.3 → 0.8** | **37.5 → 0.9** |
+| glued | **2.8 → 3.0** | **3.1 → 3.0** |
+| noterefs | **2 → 316** | **2 → 316** |
+| sup_unlinked | **502 → 187** | **502 → 187** |
+| note_items | **156 → 494** | **210 → 493** |
+| junk_imgs | **15 → 0** | **15 → 0** |
+| img_epub | **17 → 0** | **17 → 0** |
+| spine_units | **3 → 21** | **3 → 21** |
+| spine_docs | **5 → 23** | **5 → 23** |
+| nav_recall | **0.828 → 0.966** | **0.828 → 0.966** |
+| nav_precision | **0.835 → 0.983** | **0.835 → 0.983** |
+| title_ok | **0 → 1** | **0 → 1** |
+| lower_starts | **22.8 → 12.8** | **21.1 → 12.8** |
+| mid_breaks | **9.8 → 5.3** | **8.9 → 5.3** |
+| pagelist | **0.000 → 0.943** | **0.000 → 0.943** |
+| hdr_leak | **0.132 → 0.000** | 0.000 → 0.000 |
+| epubcheck | 0 → 0 | 0 → 0 |
+
+Endnotes checked against the ground truth (counted on the page images):
+
+| chapter | notes in the ground truth | notes found (pdfminer / PyMuPDF) | references linked (pdfminer / PyMuPDF) |
+|---|---|---|---|
+| 6 | 44 | 43 / 38 | 30 / 27 |
+| 9 | 26 | 26 / 26 | 15 / 15 |
+| 12 | 94 | 82 / 82 | 56 / 56 |
+
+Before: the book had no per-chapter notes section, and 2 links in all. Chapter 6's missing notes (31–33, 37–40) are absent
+from the ABBYY layer itself; nothing is between the running head and the first note line of that page. Unlinked
+references are mostly superscripts the OCR misread or lost (`sup_unlinked` counts the ones left).
+
+### 1. Letter-spacing and glued words → `backends/*` (space glyphs), `ocrfix.py` (camelCase)
+
+pdfminer adds a space wherever two glyphs are more than 0.1 em apart, and MuPDF has its own gap rule. In the ABBYY layer,
+small type is letter-spaced (gaps of 1.1–1.6 pt at 6.5 pt), so every note and bibliography word came apart. The layer has
+real space glyphs, though.
+
+What changed:
+* **Pages whose layer has its own spaces** (≥20 and ≥6 % of characters) use them as word boundaries. pdfminer's virtual
+  spaces are ignored. PyMuPDF reads such pages from `rawdict` with `TEXT_INHIBIT_SPACES`.
+* **Missing space glyphs:** a space is added only at a gap of at least 2.5× the line's letter spacing and 0.18 em.
+* **Pages without space glyphs** (LaTeX) keep the old geometric rule.
+* **Glued words:** the words ABBYY glued ("ofCalifornia") have no gap at all; ABBYY spaced their letters evenly. They are
+  split only when both halves occur at least 3 times in the book (camelCase only).
+
+Documents where a value moved (all others identical):
+
+| doc | backend | word_recall | word_precision | char_recall | order | lspaced | glued |
+|---|---|---|---|---|---|---|---|
+| arxiv-d2l | pdfminer | 0.978 → 0.978 | 0.984 → 0.984 | 0.981 → 0.981 | 0.940 → 0.940 | **3.11 → 3.14** | 1.23 → 1.23 |
+| pg-calculus-made-easy | pdfminer | 0.965 → 0.965 | 0.986 → 0.986 | 0.972 → 0.972 | 0.849 → 0.849 | **14.2 → 14.4** | 0.00 → 0.00 |
+| pg-calculus-made-easy | pymupdf | 0.970 → 0.970 | 0.985 → 0.985 | 0.974 → 0.974 | 0.863 → 0.863 | **13.5 → 13.3** | 0.21 → 0.21 |
+| pg-descartes-geometrie | pdfminer | 0.994 → 0.994 | 0.995 → 0.995 | 0.999 → 0.999 | 0.927 → 0.927 | **30.5 → 30.2** | 0.00 → 0.00 |
+| pg-descartes-geometrie | pymupdf | 0.990 → 0.990 | 0.995 → 0.995 | 0.999 → 0.999 | 0.926 → 0.926 | **27.1 → 26.8** | 0.29 → 0.29 |
+| ia-zola-roman-experimental | pdfminer | 0.972 → 0.972 | 0.992 → 0.992 | 0.986 → 0.986 | 0.935 → 0.935 | 0.62 → 0.62 | **9.64 → 9.46** |
+| ia-zola-roman-experimental | pymupdf | 0.974 → 0.974 | 0.992 → 0.992 | 0.988 → 0.988 | 0.936 → 0.936 | 0.62 → 0.62 | **9.62 → 9.45** |
+| ia-innkeeper-source | pdfminer | 0.983 → 0.983 | 0.999 → 0.999 | **0.990 → 0.989** | 0.963 → 0.963 | 0.00 → 0.00 | 0.00 → 0.00 |
+| ia-innkeeper-source | pymupdf | 0.990 → 0.990 | **0.999 → 1.000** | **0.995 → 0.994** | 0.984 → 0.984 | 0.00 → 0.00 | 0.00 → 0.00 |
+| private book | pdfminer | **0.975 → 0.976** | **0.949 → 0.998** | **0.982 → 0.976** | **0.951 → 0.979** | **84.3 → 0.82** | **2.83 → 3.05** |
+| private book | pymupdf | **0.980 → 0.976** | **0.982 → 0.998** | **0.981 → 0.976** | **0.972 → 0.979** | **37.5 → 0.89** | **3.06 → 3.05** |
+
+### 2. Endnotes → `endnotes.py`
+
+How endnotes are now built:
+* **Region:** each "Notes" heading (larger than the type below it) opens a region running to the next heading
+  ("Bibliographie"), a non-text block, or type 1.25× larger.
+* **Order:** its lines go back into reading order: page, then column, then height. Lines the page-footnote detector took
+  from the page bottoms are included. OCR rows glued across the column gap are cut at the gutter, and note rows the table
+  detector took are read back as lines.
+* **Cutting into notes:** a note starts where a line begins with the next number. A jump of up to 8 is accepted after a
+  finished note, because the OCR layer lacks some notes.
+* **Validity:** a region needs at least 3 notes of plausible length. Galois's mid-text "NOTES" block is not one.
+* **Markup:** one `<section epub:type="endnotes">` with an `<ol>` (`value` = printed number).
+* **Links:** superscript numbers in the same spine document link to their note (first occurrence), and the note links back.
+
+A bug found on the way: when the page-footnote detector rejected a candidate note, it gave the line back to the text
+with its number already stripped (". Author, 2011."). The line now comes back as printed.
+
+| doc | backend | noterefs | sup_unlinked | note_items |
+|---|---|---|---|---|
+| arxiv-d2l | pdfminer | 160 → 160 | **647 → 648** | 165 → 165 |
+| private book | pdfminer | **2 → 316** | **502 → 187** | **156 → 494** |
+| private book | pymupdf | **2 → 316** | **502 → 187** | **210 → 493** |
+
+### 3–4. Printed table of contents and chapter openings → `printedtoc.py`
+
+Parsing the contents:
+* **Finding them:** a "Sommaire" / "Table des matières" / "Contents" page within the first or last 15 pages, plus the
+  continuation pages.
+* **Rows:** re-assembled across the page-number column, and including rows PyMuPDF's table detector took.
+* **Entries:** parts ("Deuxième partie" + title), numbered chapters ("5." + author line + title lines) and other
+  entries. Sections are the lists set in smaller type under a chapter.
+* **Page offset:** voted from the folios of the running heads, read before those are removed. When the folios don't
+  settle it, it is voted from the titles found at the top of pages.
+
+When it is used, and what it does:
+* **Condition:** only when it shows structure (≥3 numbered chapters or ≥2 parts). Zola's flat TABLE leaves the round-3
+  openings plan in charge. With the TABLE in charge, Zola got 24 documents instead of 9 in an interim run.
+* **Contents pages:** dropped; the navigation replaces them.
+* **Openings:** each entry's opening page gets one `h1`: the multi-line title merged, "N. " in front for a chapter, and
+  "Deuxième partie — " for a part. The wording comes from the body or from the contents, whichever has its words more
+  frequent in the book. That keeps a front-matter title from the body, and a part title from the contents, where tesseract glued two words
+  on the divider.
+* **Bylines:** author lines, including names printed above the title, become `<p class="byline">`. Front-matter headings
+  become paragraphs.
+* **Split and navigation:** parts and unnumbered entries are level 1, and a chapter inside a part is level 2, nested
+  under it in the navigation. Sections (two-line titles merged) sit one level below, at the rank of "Notes" and
+  "Bibliographie".
+
+### 5. Page images → `pipeline._scan_is_redundant`
+
+How a scanned page with little text (< 150 characters) is judged:
+* **Rendering:** at 50 dpi.
+* **Junk:** outside its text lines, the page shows no more than 0.5 % ink, so it is blank, specks only, or a picture of
+  text the layer has. Its page picture goes.
+* **Dark pages:** a mostly dark page is judged inside its dark block, inverted (the white margin and skew are ignored),
+  and re-read by tesseract when OCR is allowed. Tesseract's lines replace the layer's when they are at least 60 % as long.
+* **Uniform layers:** an all-black mask is dropped even next to a real plate.
+
+The book's part titles now come from the inverted page, or from the contents when that reads better.
+
+| doc | backend | img_pdf | img_epub | junk_imgs |
+|---|---|---|---|---|
+| arxiv-d2l | pdfminer | 294 → 294 | **1292 → 1291** | 84 → 84 |
+| arxiv-d2l | pymupdf | 294 → 294 | **1290 → 1289** | 85 → 85 |
+| pg-calculus-made-easy | pdfminer | 0 → 0 | **576 → 578** | 15 → 15 |
+| pg-calculus-made-easy | pymupdf | 0 → 0 | **750 → 748** | 0 → 0 |
+| ia-zola-roman-experimental | pdfminer | 0 → 0 | **62 → 14** | **62 → 14** |
+| ia-zola-roman-experimental | pymupdf | 0 → 0 | **62 → 13** | **62 → 13** |
+| ia-island-plant | pdfminer | 0 → 0 | **56 → 16** | **50 → 10** |
+| ia-island-plant | pymupdf | 0 → 0 | **56 → 14** | **50 → 8** |
+| ia-innkeeper-source | pdfminer | 0 → 0 | **12 → 2** | **9 → 1** |
+| ia-innkeeper-source | pymupdf | 0 → 0 | **12 → 2** | **9 → 1** |
+| private book | pdfminer | 0 → 0 | **17 → 0** | **15 → 0** |
+| private book | pymupdf | 0 → 0 | **17 → 0** | **15 → 0** |
+
+On the Internet Archive scans, the pictures that went are blank pages (no pixel darker than mid-grey) and the all-black
+mask layer paired with every scanned page. The plates stay.
+
+### 6. Metadata → `frontmatter.py`
+
+* **Title:** the largest type on the first 6 pages, confirmed by a second page or a running head; otherwise display type
+  (≥2× body) on pages 1–3.
+* **Editors:** "Volume coordonné par" / "Sous la direction de" / "Edited by" → `dc:creator` with role `edt`.
+* **Publisher and year:** from "© X, 2017" → `dc:publisher`, `dc:date`.
+* **ISBN:** only with a valid check digit → `dc:identifier urn:isbn:…`. It may also come from the file name.
+* **File-name fallback:** without download-site prefixes and the ISBN.
+* **Placeholder authors:** "anonymous" (reportlab's default) is ignored.
+* **The book:** `dc:title` goes from "input" to the real title; the 4 editors, the publisher, 2017 and the ISBN are all
+  right.
+
+### 7. Cross-page joins → `structure.merge_across_breaks`
+
+* A quotation continues across a page.
+* A quotation's end set as a plain paragraph on the next page joins the quotation.
+* A lower-case start (or "– lower case") continues the previous paragraph even when it is marked indented, or when the
+  previous one ends in "." (an OCR'd abbreviation).
+* Running heads whose folio the OCR misread ("39<>", "2O5") are recognised as running heads again
+  (`layout._norm_key`).
+* What remains in `lower_starts` is mostly quotations introduced by "…:" that start in lower case, which is correct
+  typography.
+
+| doc | backend | mid_breaks | lower_starts | order |
+|---|---|---|---|---|
+| fr-novel-chignole | pdfminer | 0.7 → 0.7 | **3.4 → 2.7** | 1.000 → 1.000 |
+| fr-novel-chignole | pymupdf | 0.7 → 0.7 | **3.4 → 2.7** | 0.991 → 0.991 |
+| en-novel-my-antonia | pdfminer | **3.4 → 0.9** | **6.9 → 4.3** | 0.997 → 0.997 |
+| en-novel-my-antonia | pymupdf | **3.5 → 0.9** | **6.9 → 4.3** | 0.993 → 0.993 |
+| arxiv-llama | pdfminer | 5.2 → 5.2 | **62.3 → 59.9** | 0.980 → 0.980 |
+| arxiv-llama | pymupdf | 3.0 → 3.0 | **60.1 → 54.4** | 0.965 → 0.965 |
+| arxiv-foundation-models | pdfminer | 8.0 → 8.0 | **37.0 → 36.4** | 0.987 → 0.987 |
+| arxiv-foundation-models | pymupdf | 42.7 → 42.7 | **67.9 → 67.4** | 0.986 → 0.986 |
+| arxiv-d2l | pdfminer | **15.3 → 15.1** | **87.1 → 79.3** | 0.940 → 0.940 |
+| arxiv-d2l | pymupdf | **11.3 → 10.8** | **84.6 → 78.2** | 0.953 → 0.953 |
+| pg-calculus-made-easy | pdfminer | **47.3 → 46.9** | **102.6 → 98.4** | 0.849 → 0.849 |
+| pg-calculus-made-easy | pymupdf | **55.7 → 55.4** | **121.2 → 117.3** | 0.863 → 0.863 |
+| pg-descartes-geometrie | pdfminer | **247.8 → 246.2** | **347.0 → 347.7** | 0.927 → 0.927 |
+| pg-descartes-geometrie | pymupdf | **114.9 → 115.2** | **256.7 → 254.9** | 0.926 → 0.926 |
+| ia-zola-roman-experimental | pdfminer | 20.7 → 20.7 | **90.7 → 88.7** | 0.935 → 0.935 |
+| ia-zola-roman-experimental | pymupdf | **214.2 → 214.8** | **615.7 → 615.0** | 0.936 → 0.936 |
+| ia-island-plant | pdfminer | **74.3 → 45.6** | **104.7 → 73.7** | 0.977 → 0.977 |
+| ia-island-plant | pymupdf | **90.0 → 82.0** | **131.8 → 118.0** | 0.983 → 0.983 |
+| ia-innkeeper-source | pdfminer | **74.6 → 75.8** | **164.2 → 166.7** | 0.963 → 0.963 |
+| ia-innkeeper-source | pymupdf | **60.6 → 61.5** | **90.9 → 92.3** | 0.984 → 0.984 |
+| private book | pdfminer | **9.8 → 5.3** | **22.8 → 12.8** | **0.951 → 0.979** |
+| private book | pymupdf | **8.9 → 5.3** | **21.1 → 12.8** | **0.972 → 0.979** |
+
+### 8. Page list
+
+* **Labels:** when the folios agree on one printed → PDF offset (on ≥30 % of the pages, ≥50 % of them agreeing), or when
+  the printed contents fixed it.
+* **Markers:** an empty `epub:type="pagebreak"` marker (`role="doc-pagebreak"`) opens each printed page. It sits inside
+  the paragraph that runs across the break, set when the paragraphs are joined.
+* **Navigation:** a hidden `page-list` nav lists the markers actually written.
+* **Coverage:** the public documents with consistent folios get a page list too.
+
+| doc | backend | pagelist |
+|---|---|---|
+| fr-novel-roi-montagnes | pdfminer | **0.000 → 0.973** |
+| fr-novel-roi-montagnes | pymupdf | **0.000 → 0.973** |
+| fr-novel-glebe | pdfminer | **0.000 → 0.881** |
+| fr-novel-glebe | pymupdf | **0.000 → 0.881** |
+| en-novel-my-antonia | pdfminer | **0.000 → 0.873** |
+| en-novel-my-antonia | pymupdf | **0.000 → 0.873** |
+| en-novel-puck | pdfminer | **0.000 → 0.849** |
+| en-novel-puck | pymupdf | **0.000 → 0.849** |
+| arxiv-mistral | pdfminer | **0.000 → 1.000** |
+| arxiv-mistral | pymupdf | **0.000 → 1.000** |
+| arxiv-foundation-models | pdfminer | **0.000 → 1.000** |
+| arxiv-foundation-models | pymupdf | **0.000 → 1.000** |
+| arxiv-d2l | pdfminer | **0.000 → 0.816** |
+| arxiv-d2l | pymupdf | **0.000 → 0.813** |
+| pg-calculus-made-easy | pdfminer | **0.000 → 0.911** |
+| pg-calculus-made-easy | pymupdf | **0.000 → 0.921** |
+| ia-zola-roman-experimental | pdfminer | **0.000 → 0.931** |
+| ia-zola-roman-experimental | pymupdf | **0.000 → 0.936** |
+| ia-innkeeper-source | pdfminer | **0.000 → 0.750** |
+| ia-innkeeper-source | pymupdf | **0.000 → 0.750** |
+| scan-only-en | pdfminer | **0.000 → 1.000** |
+| scan-only-en | pymupdf | **0.000 → 1.000** |
+| private book | pdfminer | **0.000 → 0.943** |
+| private book | pymupdf | **0.000 → 0.943** |
+
+The other public documents have no readable folios (or no agreeing offset) and get no page list.
+
+### 9. OCR corrections → `ocrfix.py` (OCR'd books only)
+
+Fixed patterns:
+* "lbid" → "Ibid" and "Tbe" → "The";
+* "xix" + superscript "c" → "e";
+* spaced or misread digits in years and page numbers.
+
+Lexicon changes:
+* The lexicon is the book itself. A word changes only when its `î`→`ï`/`i` or `rn`↔`m` variant, or its camelCase split,
+  occurs ≥3 times in the book and the original at most once.
+* "cl"/"d" and "li"/"h" were left out: rare real words ("clans") would become frequent ones ("dans").
+
+On the book: 91 changes (pdfminer): 39 roman "c" → "e", 19 "lbid", 10 "Tbe", 14 camelCase splits, 6 spaced years, 2 lexicon words ("î" → "i" / "rn" → "m"), 1 "O" read for a zero. All 16 lexicon and camelCase changes and a random sample of the others were checked by hand:
+no wrong correction.
+
+### Public corpus: means, before → after
+
+18 public documents; the private book is left out of the means.
+
+| backend | word_recall | word_precision | order | mid_breaks | hyph_left | hdr_leak | pnum_leak | lspaced | glued | lower_starts | junk_imgs | pagelist | epubcheck |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pdfminer | 0.983 → 0.983 | 0.992 → 0.992 | 0.948 → 0.948 | **35.8 → 34.0** | 1.6 → 1.6 | 0.005 → 0.005 | 0.053 → 0.053 | **3.48 → 3.47** | 13.7 → 13.7 | **70.3 → 67.6** | **12.8 → 7.500** | **0.000 → 0.555** | 0.000 → 0.000 |
+| pymupdf | 0.984 → 0.984 | 0.993 → 0.993 | 0.950 → 0.950 | **41.8 → 41.3** | 1.0 → 1.0 | 0.012 → 0.012 | 0.057 → 0.057 | **3.06 → 3.03** | **16.1 → 16.0** | **100.5 → 98.6** | **13.5 → 8.000** | **0.000 → 0.555** | 0.000 → 0.000 |
+
+Structure columns that moved (chapters / headings / chapter ground truth / running heads):
+
+| doc | backend | chapters | headings | outline_match | ch_found | sec_found | ch_spurious | hdr_leak |
+|---|---|---|---|---|---|---|---|---|
+| arxiv-d2l | pdfminer | **187 → 188** | **1379 → 1380** | 0.998 → 0.998 | – → – | – → – | – → – | **0.000 → 0.001** |
+| ia-zola-roman-experimental | pdfminer | 9 → 9 | **45 → 46** | – → – | 7 → 7 | 13 → 13 | 0 → 0 | 0.037 → 0.037 |
+| ia-zola-roman-experimental | pymupdf | 9 → 9 | **51 → 52** | – → – | 7 → 7 | 13 → 13 | 0 → 0 | 0.085 → 0.085 |
+| ia-island-plant | pdfminer | 4 → 4 | **4 → 5** | – → – | 3 → 3 | – → – | 0 → 0 | 0.000 → 0.000 |
+| ia-island-plant | pymupdf | 4 → 4 | **6 → 8** | – → – | 3 → 3 | – → – | 0 → 0 | 0.000 → 0.000 |
+| private book | pdfminer | **5 → 23** | **140 → 119** | – → – | – → – | – → – | – → – | **0.132 → 0.000** |
+| private book | pymupdf | **5 → 23** | **139 → 119** | – → – | – → – | – → – | – → – | 0.000 → 0.000 |
+
+### What moved the wrong way (investigated)
+
+* **Private book, character recall 0.982 → 0.976 (word recall 0.980 → 0.976 with PyMuPDF):** by design. The printed
+  Sommaire pages are dropped (the navigation replaces them), and they hold 0.48 % of the book's text.
+* **Internet Archive scans, `img_epub` down (Island 56 → 16 / 14, Zola 62 → 14 / 13, Innkeeper 12 → 2):** checked
+  picture by picture. What went is blank pages (no pixel darker than mid-grey) and the all-black mask layer that came with
+  each scanned page; `junk_imgs` falls by the same amount. The pictures that stay are the plates and decorations.
+* **Innkeeper, `mid_breaks` 74.6 → 75.8 and `lower_starts` 164.2 → 166.7:** same count of breaks and lower-case starts,
+  one paragraph fewer in the denominator (67 → 66).
+* **Island (PyMuPDF) headings 6 → 8, Zola +1, Island (pdfminer) +1:** running-head variants or OCR noise on a page whose
+  picture went ("ISLAND PLANT", "_i"). Chapters and sections against the ground truth are unchanged (Island 3/3, Zola 7/7
+  and 13/13, 0 spurious).
+* **D2L (pdfminer): one more chapter and heading:** a real section title ("Introduction to Gaussian Processes") became a
+  heading. Header leak goes from 0.000 to 0.001 (one line) and one picture fewer; outline match is unchanged.
+* **Private book, `glued` 2.8 → 3.0 (pdfminer):** spaces pdfminer used to add at real but glyph-less gaps are now added
+  only at wide gaps. The camelCase splitter takes back most of them.
+* **Interim run (fixed before the final run):**
+  * Zola got 24 chapter files from its flat TABLE. Fixed by the structure condition.
+  * Galois lost 1.2 % of its words to a mid-text "NOTES" block taken for endnotes. Fixed by the stricter region end.
+  * Roi des montagnes got 9 headings from its contents rows. I reverted a contents-is-not-a-table rule in the table
+    detector; the contents parser reads the table instead.
+  * epubcheck duplicate-id and fragment errors: each page marker is written once, and the page list holds only written
+    markers.
+  * A noteref linked across documents: linking is now per spine document.
+* **Test suite:** 416 passed, 2 skipped. One failure, `web/tests/test_cli.py::test_launch_failure_pauses_on_windows`:
+  it passes alone, fails only in the full run (order-dependent), and fails the same way on `main` (ba5e2be). It does
+  not involve the converter core.
+
+### Not fixed
+
+* **OCR text left as read:**
+  * Text the ABBYY layer lacks (some endnotes, a few lines) is not recovered; the layer is used as is.
+  * Part titles read by tesseract from the inverted dividers keep small errors when the contents is no better.
+  * Titles keep the Sommaire's misreads where the body's wording is worse, e.g. a valid word where two were printed.
+* **References:** superscripts misread as letters or lost by the OCR stay unlinked (187 of 503 superscripts). Plain
+  "word23" references are never linked.
+* **Bylines:** names on two lines of the same block are joined without a separator in one byline (chapter 1).
+* **Credits:** translator credits are printed at the end of each chapter, just before Notes. They stay as ordinary
+  paragraphs, not `credit` paragraphs.
+* **Glued words:** only camelCase glue is split. All-lower-case glue ("danslavie") needs a real dictionary, since the
+  book's own words would wrongly split real compounds ("contrepartie").
+* **Two-column notes:** split by number and column; a note whose number the OCR misread ("l." for "1.") is merged into
+  the previous one.
+* **Per-fix runs:** all fixes were measured in one before/after pair, plus one interim run after fixes 1, 5 and 6
+  (labels `r5-before`, `r5-mid`, `r5-after` in `tests/corpus/out`). There is no separate full-corpus run per fix.
+
+## Round 5b: review of round 5
+
+"Before" is `main` (`r5-before`), the middle value is round 5 (`r5-after`), and "after" is this tree (`r5b-after`). All
+19 documents were run with both backends and epubcheck on. The test suite: 427 passed, 2 skipped, no failure.
+
+| doc | backend | nav entries | garbled | unsupported | headings | GT chapters | GT sections | spurious | lower-case starts /1000 |
+|---|---|---|---|---|---|---|---|---|---|
+| ia-zola-roman-experimental | pdfminer | 45 → 46 → 42 | 0 → 1 → 0 | 19 → 20 → 18 | 45 → 46 → 42 | 7 → 7 → 7 | 13 → 13 → 13 | 0 | 90.7 → 88.7 → 88.2 |
+| ia-zola-roman-experimental | pymupdf | 47 → 48 → 42 | 0 → 1 → 0 | 19 → 20 → 17 | 51 → 52 → 46 | 7 → 7 → 7 | 13 → 13 → 13 | 0 | 615.7 → 615.0 → 612.0 |
+| ia-island-plant | pdfminer | 4 → 5 → 4 | 0 → 1 → 0 | 0 → 1 → 0 | 4 → 5 → 4 | 3 → 3 → 3 | – | 0 | 104.7 → 73.7 → 73.4 |
+| ia-island-plant | pymupdf | 6 → 8 → 4 | 0 → 1 → 0 | 2 → 4 → 0 | 6 → 8 → 4 | 3 → 3 → 3 | – | 0 | 131.8 → 118.0 → 123.0 |
+| ia-innkeeper-source | pdfminer | 3 → 3 → 2 | 0 | 1 → 1 → 0 | 4 → 4 → 2 | 1 → 1 → 1 | – | 0 | 164.2 → 166.7 → 173.9 |
+| ia-innkeeper-source | pymupdf | 3 → 3 → 2 | 0 | 1 → 1 → 0 | 5 → 5 → 2 | 1 → 1 → 1 | – | 0 | 90.9 → 92.3 → 101.4 |
+| private book | both | 121 → 119 → 115 | 0 | – | 140 → 119 → 115 | 21 of 21 units open a document | nav recall 0.966, precision 0.983 | – | 22.8 → 12.8 → 12.8 |
+
+Public documents in total, `nav_garbled` / `nav_unsupported`:
+* pdfminer: 187 / 163 (main) → 189 / 166 (round 5) → 187 / 162.
+* PyMuPDF: 185 / 166 → 187 / 170 → 185 / 162.
+
+**1. Junk navigation entries ("MeeISLAND PLANT", "_i").** The text of those pages was unchanged. Round 5 dropped the blank
+page pictures that sat between the title-page lines, and some of those OCR lines then passed the size-based heading test.
+Three rules now apply to OCR'd text (`structure.convert_blocks`):
+* a line on a page with under 150 characters of OCR text (title page, bookplate, plate) is never a heading;
+* in a scanned book with a chapter plan, an OCR line before the first chapter is not a heading;
+* an OCR heading shaped like noise is not a heading: under 60 % letters, or a word glued across a case change ("MeeISLAND").
+
+Effect on the navigation, against `main`:
+* **Island:** pdfminer now has the same entries as `main`. PyMuPDF also loses `main`'s title-page entries "MARY CATHERINE
+  LEE" and "AN ISLAND PLANT.".
+* **Zola:** the title-page entries go ("ROMAN EXPÉRIMENTAL", "EMILE ZOLA LE ROMAN", "EXPÉRIMENTAL", "PARIS
+  IBLIOTHÈQUE-CHARPENTIER"), plus, with PyMuPDF, a duplicate half-title entry "NATURALISME AU THÉÂTRE". The 7 chapters and
+  13 sections are all still found.
+* **Innkeeper:** the title-page author line goes.
+* **Innkeeper, lower-case starts up:** an OCR-noise line on its title page used to be a heading and is now a paragraph.
+  The denominator is small (about 69 paragraphs).
+
+New evaluator metrics:
+* `nav_garbled`: navigation entries shaped like OCR noise.
+* `nav_unsupported`: entries that match no outline or hand-checked title. The first entry and Notes / Bibliographie /
+  Conclusion are excepted.
+
+**2. Bylines (book).** In chapters 6, 9, 12 and 15 the authors are printed in the same OCR block as the title. That block
+was skipped as "the author line", so the title was never matched: a heading was made from the contents, and the
+"author + title" block stayed as a section, which was chapter 15's duplicate entry. Now a block starting with the
+contents' authors is split: the closest-matching name prefix becomes `<p class="byline">` and the rest is matched as the
+title. All 15 numbered chapters have a byline on both backends, and no "author + title" entries remain.
+
+**3. Épilogue (book).** An unnumbered contents entry directly followed (within 2 printed pages) by a numbered chapter is a
+divider holding it, like a part. So "Épilogue" holds chapter 15 and "Introduction" holds chapter 1, as in the printed
+book, where both are divider pages before their text.
+
+Choosing between the two readings of a title:
+* **Same letters, different accents:** the one with more accents wins, since OCR drops accents more often than it adds
+  them ("Épilogue", not "Epilogue").
+* **Different words:** the body's wording must beat the contents' by a margin. On PyMuPDF's render, tesseract read
+  "Epiloguc", which occurs once in the book; that occurrence alone no longer decides.
+
+**4. PDF metadata strings.** My Antonia's Info title is UTF-8 bytes without a byte-order mark, and pdfminer decoded it as
+PDFDocEncoding ("My Ã†ntonia").
+* **Decoding:** `backends.common.decode_pdf_string` handles UTF-16 BE/LE and UTF-8 with a byte-order mark. Bytes that are
+  valid multibyte UTF-8 are read as UTF-8, otherwise as PDFDocEncoding. Used for the Info title / author and for pdfminer
+  outline titles.
+* **Repair:** `repair_mojibake` fixes already-decoded strings (PDFDocEncoding, then Windows-1252, then Latin-1) and is
+  applied to both backends' metadata.
+* **Result:** `dc:title` is "My Ántonia" with both backends.
+
+**On the way: PyMuPDF spacing accents.** TeX sets an accent before a capital in its own font, as a one-character span
+("G" "´" "EOM"). The accent now joins its letter when it combines and both spans are text of the same size: Descartes
+"LA GÉOMÉTRIE", "NOUVELLE ÉDITION", "LIVRE TROISIÈME". A first version also combined backticks before code and hats on
+single math variables. That moved D2L's formula pictures (+3) and Mistral's reading order (−0.004); the final rule
+excludes both, and those documents match `main` again.
+
+**Still differing from `main`, and why:**
+* **D2L, PyMuPDF navigation:** two outline sub-entries left the navigation. "Convenience Functions" was a second entry
+  pointing a few blocks before the heading that already has its own entry. "Training and Prediction" is placed by the
+  PDF outline on page 423, while the heading is on page 425. On `main` it linked to an unrelated paragraph; now it falls
+  on the same block as the previous outline entry and is merged with it. The headings themselves are unchanged.
+* **D2L, pdfminer:** one more navigation entry, "Introduction to Gaussian Processes", a real section title that became a
+  heading in round 5.
+* **Foundation Models:** its first navigation entry is now the full title, from the title page.
+
+Tests:
+* `test_book_structure.py`: noise headings, author prefix → byline, divider entries holding the next chapter.
+* `test_text_layer.py`: PDF metadata strings, synthetic PDF with a raw UTF-8 title; an accent in its own font.
+
+## Round 5c: words cut by page markers
+
+**The regression.** Zola converted with the default options (`ocr: auto`) had about 60 words cut in two against `main`
+("phy siologie", "con naissance", "elle- même."). The cause was not the space-glyph rule, but where the round-5
+page-break marker went. When a word hyphenated across a page break was joined, the empty
+`<span epub:type="pagebreak">` was inserted between its two halves. Readers show the word whole, but any tool that
+treats tags as word boundaries (search, read-aloud, a word diff) sees two words.
+
+Why the corpus run missed it:
+* The run uses `ocr: off`, as in the manifest, and with that option those joins did not cut runs inside the word.
+* The evaluator reads each element's text joined across tags.
+
+**The fix.** `structure._insert_between_words`: a marker that would fall inside a word moves to the next space, which
+covers hyphenated words, compounds kept with their hyphen ("elle-même") and a word followed by punctuation. Zola with
+default options now differs from `main` only by 7 OCR corrections: "chirniste" → "chimiste", "rn'a" → "m'a",
+"rn'ont" → "m'ont", "3o8" → "308", "200 1." → "2001.", "dontParis" → "dont Paris", "accuseMichelle." →
+"accuse Michelle.".
+
+**Also changed: spaces in formulas on pages with space glyphs.** The diff also turned up ") −γ max" → ")−γmax" in one
+D2L formula (PyMuPDF). Formulas have no space glyphs and their spacing is narrower than the "missing space" threshold.
+Between math-font glyphs, the usual narrow gap (0.12 em) is now a space again, in both backends.
+
+**New metrics.** The evaluator now reads a page marker as a word boundary, so a marker inside a word counts as a cut.
+`split_words` and `joined_words` are given per 10k words:
+* **Split:** two EPUB words whose concatenation is a reference word but which never stand side by side in the
+  reference. Words the reference itself glues in camelCase ("accuseMichelle") are excepted.
+* **Joined:** an EPUB word that is not in the reference but is two reference words that stand side by side there.
+
+Absolute counts, `main` → this tree, summed over the 18 public documents:
+
+| backend | split + joined, `main` | split + joined, now |
+|---|---|---|
+| pdfminer | 839 | 838 |
+| PyMuPDF | 1161 | 1161 |
+
+Per document there is no increase anywhere; the one decrease is My Ántonia (1 → 0). On the private book, split words fall
+2290 → 89 (pdfminer) and 788 → 88 (PyMuPDF). Joined words rise 1 → 29 and 13 → 29: these are words the ABBYY layer
+itself glued. pdfminer's gap rule used to cut them apart by chance, along with the letter-spaced ones. Dictionary-based
+splitting is the next round.
+
+**My Ántonia navigation (74 → 73 entries).** The entry for the front matter is still there: it is the first entry,
+"My Ántonia", linking to ch001.xhtml (title page, contents, illustrations). What went is a second entry, a link to the
+title-page heading a few blocks into that same document. With the metadata title decoded correctly, its title equals its
+parent's, and the existing rule leaves out a section repeating its chapter's title. On `main` both were listed only
+because the parent read "My Ã†ntonia".
+
+Runs: `r5c-after`, all 19 documents with both backends, epubcheck 0 errors everywhere. Other metrics are as in round 5b.
+The test suite: 429 passed, 2 skipped. New tests: `test_a_page_marker_never_cuts_a_word` (`test_book_structure.py`) and
+`test_a_spacing_accent_set_in_its_own_font_joins_its_letter` (`test_text_layer.py`).
+
 ## Round 3: chapters of scanned books, mathematics, two-column order
 
 "Before" is `main` at 9cb7528, re-measured now with the same evaluator as "after" (`--src` runs another checkout's

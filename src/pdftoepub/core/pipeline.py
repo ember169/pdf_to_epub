@@ -9,8 +9,10 @@ from contextlib import nullcontext
 from collections import Counter
 from pathlib import Path
 
+from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
+
 from ..api import ConversionError, ConvertOptions, ConvertResult, ProgressCb, ProgressEvent
-from . import formulas, layout, ocr, openings, structure
+from . import endnotes, formulas, frontmatter, layout, ocr, ocrfix, openings, printedtoc, structure
 from .backends import get_backend
 from .backends.common import ImageStore, cover_from_pil, limit_pillow, page_text_quality
 from .epub import write_epub
@@ -73,6 +75,64 @@ def _normalize_ocr_sizes(pages: list[PageData]) -> None:
                         s.size *= k
 
 
+def _scan_is_redundant(pd: PageData, thumb) -> tuple[bool, bool]:
+    """(junk, inverted) for a scanned page with little text. The page image is junk when, outside its text lines, it
+    holds no more than specks: a blank page, or a picture of text the layer already has. A mostly dark page is read
+    as white on black (inverted) first."""
+    img = thumb.convert("L")
+    sx, sy = img.width / max(pd.width, 1.0), img.height / max(pd.height, 1.0)
+    inverted = ImageStat.Stat(img).mean[0] < 110
+    if inverted:  # the dark block only (scans keep a white margin around it), then white on black -> black on white
+        dark = img.point(lambda v: 255 if v < 128 else 0)
+        rows = _longest_run(v > 150 for v in dark.resize((1, img.height), Image.BOX).tobytes())
+        cols = _longest_run(v > 150 for v in dark.resize((img.width, 1), Image.BOX).tobytes())
+        dx, dy = max(2, round(0.03 * img.width)), max(2, round(0.03 * img.height))  # scans are a little skewed
+        box = (cols[0] + dx, rows[0] + dy, cols[1] - dx, rows[1] - dy) if rows and cols else None
+        if box and box[2] > box[0] and box[3] > box[1]:
+            block = Image.new("L", img.size, 0)  # black outside the block: no ink once inverted
+            block.paste(img.crop(box), box[:2])
+            img = block
+        img = ImageOps.invert(img)
+    ink = img.point(lambda v: 255 if v < 128 else 0)
+    if pd.lines:
+        mask = Image.new("L", img.size, 0)
+        draw = ImageDraw.Draw(mask)
+        for l in pd.lines:
+            m = 0.5 * l.size
+            draw.rectangle(((l.x0 - m) * sx, (l.y0 - m) * sy, (l.x1 + m) * sx, (l.y1 + m) * sy), fill=255)
+        ink = ImageChops.subtract(ink, mask)
+    left = sum(ink.histogram()[128:]) / max(1, img.width * img.height)
+    return left < 0.005, inverted
+
+
+def _uniform(store: ImageStore, iid: str) -> bool:
+    asset = store.assets.get(iid)
+    if asset is None:
+        return False
+    try:
+        import io
+
+        im = Image.open(io.BytesIO(asset.data)).convert("L")
+        im.thumbnail((200, 200))
+        return ImageStat.Stat(im).stddev[0] < 6
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _longest_run(flags) -> tuple[int, int] | None:
+    """[start, end) of the longest run of true values."""
+    best, start = None, None
+    flags = list(flags) + [False]
+    for i, f in enumerate(flags):
+        if f and start is None:
+            start = i
+        elif not f and start is not None:
+            if best is None or i - start > best[1] - best[0]:
+                best = (start, i)
+            start = None
+    return best
+
+
 def _extract_all(doc, options: ConvertOptions, progress, warnings: list[str], store: ImageStore, lock=nullcontext()):
     n = doc.page_count
     pages: list[PageData] = []
@@ -132,6 +192,38 @@ def _extract_all(doc, options: ConvertOptions, progress, warnings: list[str], st
                     ocr_pages += 1
         elif scan and nchars >= 150:
             pd.images = [im for im in pd.images if im.kind != "scan"]  # searchable scan: the text layer is the content
+        if any(im.kind == "scan" for im in pd.images) and options.image_mode != "none" \
+                and page_text_quality(pd.lines, 0)[0] < 150:
+            try:
+                with lock:
+                    thumb = doc.render_page(pno, 50, gray=True)
+                junk, inverted = _scan_is_redundant(pd, thumb)
+            except Exception:  # noqa: BLE001 - keep the page image when it cannot be judged
+                junk, inverted = False, False
+            if inverted and options.ocr != "off" and pd.source != "ocr":  # white on black (part dividers): OCR it inverted
+                if not engine_checked:
+                    engine, warn = ocr.find_engine(options.ocr_langs)
+                    engine_checked = True
+                    if warn:
+                        warnings.append(warn)
+                if engine is not None:
+                    try:
+                        with lock:
+                            image = doc.render_page(pno, ocr.OCR_DPI, gray=True)
+                        lines = ocr.ocr_image(engine, ImageOps.invert(image), pno)
+                        del image
+                    except Exception:  # noqa: BLE001
+                        lines = None
+                    lines = [l for l in lines or [] if sum(c.isalpha() for c in l.text) >= 2  # not specks ("»")
+                             or re.fullmatch(r"\s*[IVXLC\d]{1,4}\s*[.·-]?\s*", l.text)]
+                    letters = sum(c.isalpha() for l in lines for c in l.text)
+                    if lines and letters >= 0.6 * sum(c.isalpha() for l in pd.lines for c in l.text):
+                        pd.lines, pd.source, pd.ocr_layer = lines, "ocr", False
+                        ocr_pages += 1
+            if junk:  # blank, specks, or a picture of text the layer already holds
+                pd.images = [im for im in pd.images if im.kind != "scan"]
+            else:  # a uniform layer of the scan (an all-black mask) is no picture either
+                pd.images = [im for im in pd.images if im.kind != "scan" or not _uniform(store, im.image_id)]
         if pd.source == "native" and options.image_mode != "none":
             def render(rect, dpi, pno=pno):
                 with lock:
@@ -200,11 +292,16 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
     for p in pages:
         if p.source == "ocr" or p.ocr_layer:
             layout.snap_ocr_sizes(p)
+    fol = printedtoc.folios(pages)  # printed page numbers, before running heads and folios are removed
+    printed_toc, toc_pages = printedtoc.parse(pages)
     running: Counter = Counter()
     if options.drop_headers_footers:
         layout.remove_running(pages, warnings, running)
     ctx = layout.compute_ctx(pages, options.detect_columns)
     layout.drop_ocr_noise(pages, ctx)
+    printed = frontmatter.from_pages(pages, ctx.body_size, running)
+    ctx.sparse_pages = {p.number for p in pages if (p.source == "ocr" or p.ocr_layer)
+                        and page_text_quality(p.lines, 0)[0] < 150}
 
     raw = []
     notes: dict[int, list] = {}
@@ -220,13 +317,20 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
             notes[p.number] = ns
     if not raw:
         raise ConversionError("No readable text was found in this PDF.")
+    raw = endnotes.extract(raw, notes, {p.number: p.width for p in pages})
 
     model = structure.build_heading_model(raw, ctx)
     toc = structure.clean_toc(toc_raw, n)
+    offset = printedtoc.page_offset(fol) if printed_toc and not toc else None
+    if offset is None and printed_toc and not toc:
+        offset = printedtoc.offset_from_titles(printed_toc, pages, toc_pages)
+    # a flat list of titles carries less than the page-layout openings (scans): numbered chapters or parts are needed
+    use_printed = offset is not None and len(printed_toc) >= 3 and (
+        sum(e.kind == "chapter" for e in printed_toc) >= 3 or sum(e.kind == "part" for e in printed_toc) >= 2)
     plan = None
-    if not toc:  # scanned books: chapters from the page layout and the printed table of contents
+    if not toc and not use_printed:  # scanned books: chapters from the page layout and the printed table of contents
         plan = openings.plan(raw, pages, ctx, running, structure.clean_text_field(options.title)
-                             or structure.clean_meta_title(meta.get("title")) or "")
+                             or structure.clean_meta_title(meta.get("title")) or printed.title or "")
     blocks, footnotes = structure.convert_blocks(raw, ctx, notes, model, plan)
     blocks = structure.inline_display_math(blocks)
     blocks = structure.merge_across_breaks(blocks, ctx)
@@ -234,19 +338,35 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
     blocks = structure.group_lists(blocks)
     blocks = structure.attach_captions(blocks)
     blocks = structure.merge_adjacent_headings(blocks)
+    split_level = None
+    if use_printed:  # the printed contents: one spine document per part / chapter, its sections in the navigation
+        blocks, entries = printedtoc.apply(blocks, printed_toc, toc_pages, offset, n)
+        toc = structure.clean_toc([(lv, t, p, max(y, 0.0)) for lv, t, p, y in entries], n)
+        split_level = max(e.level for e in printed_toc)
+    if sum(p.source == "ocr" or p.ocr_layer for p in pages) >= 0.5 * len(pages):
+        ocrfix.correct(blocks)
     if not blocks:
         raise ConversionError("No readable text was found in this PDF.")
 
     # ------------------------------------------------------------------ metadata
     # every candidate is sanitised; one that ends up empty (control characters only, lone surrogates) falls through
     title = (structure.clean_text_field(options.title) or structure.clean_meta_title(meta.get("title"))
-             or _guess_title(blocks, pdf_path))
+             or structure.clean_text_field(printed.title) or _guess_title(blocks, pdf_path))
     author = structure.clean_text_field(options.author) or structure.clean_text_field(meta.get("author"))
+    if re.fullmatch(r"(?i)(anonymous|unknown|unspecified|author|user|admin(istrator)?|n/?a)", author or ""):
+        author = ""  # a tool's placeholder (reportlab writes "anonymous"), not a name
+    creators = [] if author else [(n, "edt") for n in (structure.clean_text_field(e) for e in printed.editors) if n]
     sample = " ".join(structure.plain(b.runs) for b in blocks if isinstance(b, Paragraph))[:30000]
     lang = options.language if options.language and _LANG_OK.match(options.language) else structure.detect_language(sample)
 
-    chapters = structure.build_chapters(blocks, toc, n, title, warnings)
+    chapters = structure.build_chapters(blocks, toc, n, title, warnings, split_level)
+    for ch in chapters:  # a reference and its endnote in the same document
+        endnotes.link(ch.blocks)
     structure.resolve_links(chapters)
+    labels = printedtoc.page_labels(fol, n)
+    if not labels and use_printed:  # the contents' page numbers fixed the offset
+        labels = {p: str(p + offset) for p in range(1, n + 1) if p + offset >= 1}
+    structure.mark_pages(chapters, labels)
     _attach_orphan_notes(chapters, footnotes)
 
     # ------------------------------------------------------------------ build
@@ -254,7 +374,9 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
     used = {b.image_id for ch in chapters for b in ch.blocks if isinstance(b, Figure)}
     used |= {r.image[0] for ch in chapters for b in ch.blocks if isinstance(b, Paragraph) for r in b.runs if r.image}
     images = {k: v for k, v in store.assets.items() if k in used}
-    doc_ir = Document(title, author, lang, chapters, images, cover, warnings)
+    doc_ir = Document(title, author, lang, chapters, images, cover, warnings, creators,
+                      structure.clean_text_field(printed.publisher) or "", printed.year,
+                      printed.isbn or frontmatter.isbn_from_filename(pdf_path.stem), labels)
     ident = "urn:uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, _fingerprint(pdf_path) + "|" + title))
     epub_path.parent.mkdir(parents=True, exist_ok=True)
     write_epub(doc_ir, footnotes, epub_path, ident)
@@ -286,7 +408,7 @@ def _guess_title(blocks, pdf_path: Path) -> str:
             t = structure.clean_text_field(structure.plain(b.runs))
             if 2 <= len(t) <= 200:
                 return t
-    stem = structure.clean_text_field(re.sub(r"[_]+", " ", pdf_path.stem))  # may hold surrogate escapes
+    stem = structure.clean_text_field(frontmatter.title_from_filename(pdf_path.stem))  # may hold surrogate escapes
     return stem or "Untitled"
 
 

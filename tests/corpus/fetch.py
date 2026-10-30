@@ -23,6 +23,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 MANIFEST = HERE / "manifest.json"
 CORPUS = HERE.parent / ".corpus"
+# Copyrighted books the user owns are listed in a git-ignored manifest next to them, so the public repository never
+# names them or carries their hashes.
+PRIVATE_MANIFEST = CORPUS / "private" / "manifest.json"
+
+
+def private_documents() -> list[dict]:
+    if not PRIVATE_MANIFEST.exists():
+        return []
+    return [{**d, "private": True} for d in json.loads(PRIVATE_MANIFEST.read_text())["documents"]]
 UA = "pdftoepub-corpus-fetch/1.0 (+evaluation of an open-source PDF to EPUB converter)"
 
 
@@ -35,7 +44,7 @@ def sha256(path: Path) -> str:
 
 
 def path_of(doc: dict) -> Path:
-    return CORPUS / f"{doc['id']}.pdf"
+    return CORPUS / doc.get("file", f"{doc['id']}.pdf")
 
 
 def download(url: str, dest: Path) -> None:
@@ -79,14 +88,19 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     manifest = json.loads(MANIFEST.read_text())
     CORPUS.mkdir(exist_ok=True)
-    by_id = {d["id"]: d for d in manifest["documents"]}
+    documents = manifest["documents"] + private_documents()
+    by_id = {d["id"]: d for d in documents}
     failed = changed = 0
     # plain downloads first, so derived entries find their source
-    for doc in sorted(manifest["documents"], key=lambda d: "derive" in d):
+    for doc in sorted(documents, key=lambda d: "derive" in d):
         if args.ids and doc["id"] not in args.ids and not any(by_id[i].get("derive", {}).get("from") == doc["id"] for i in args.ids):
             continue
         dest = path_of(doc)
         want = doc.get("sha256")
+        if doc.get("private"):  # a copyrighted book the user owns: never downloaded, only checked when present
+            state = "ok" if dest.exists() and sha256(dest) == want else ("sha256 mismatch" if dest.exists() else "absent")
+            print(f"private  {doc['id']}: {state} (place it at {dest.relative_to(CORPUS.parent.parent)}; no URL, skipped)")
+            continue
         if dest.exists() and (want is None or sha256(dest) == want):
             print(f"ok       {doc['id']}")
         else:
@@ -114,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
                 failed += 1
     if changed:
         MANIFEST.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
-    total = sum(path_of(d).stat().st_size for d in manifest["documents"] if path_of(d).exists())
+    total = sum(path_of(d).stat().st_size for d in documents if path_of(d).exists())
     print(f"corpus: {total / 1e6:.1f} MB in {CORPUS}")
     return 1 if failed else 0
 

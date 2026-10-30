@@ -34,6 +34,7 @@ class Ctx:
     hyph_vocab: Counter = field(default_factory=Counter)
     npages: int = 0
     detect_columns: bool = True
+    sparse_pages: set = field(default_factory=set)  # OCR pages with little text (title pages, plates): no OCR headings
 
 
 def body_size(pages: list[PageData]) -> float:
@@ -141,7 +142,11 @@ def drop_ocr_noise(pages: list[PageData], ctx: Ctx) -> int:
 # Running headers / footers
 # ---------------------------------------------------------------------------
 def _norm_key(text: str) -> str:
-    t = re.sub(r"\d+", "#", text.strip().lower())
+    t = text.strip()
+    # a folio the OCR misread at either end ("39<>", "IoO", "2O6"): a token of <= 4 characters with a digit or a sign
+    t = re.sub(r"^(?=\S{0,3}[\d<>|!])[\w<>|!]{1,4}\s+(?=\S)", "#", t)
+    t = re.sub(r"(?<=\S)\s+(?=[\w<>|!]{0,3}[\d<>|!])[\w<>|!]{1,4}$", "#", t)
+    t = re.sub(r"\d+", "#", t.lower())
     t = "".join(c for c in unicodedata.normalize("NFKD", t) if not unicodedata.combining(c))
     t = re.sub(r"[\s.,;:'’\"«»|_^-]+", "", t)  # OCR shifts spaces and misreads accents / punctuation in running heads
     bare = t.strip("#")  # the folio may sit on either side of the head (verso / recto): same key
@@ -265,6 +270,7 @@ class RawNote:
     lines: list[Line]
     page: int
     orphan: bool = False
+    source: Line | None = None  # the first line as printed, marker included (given back when the note is rejected)
 
 
 def _norm_marker(m: str) -> str:
@@ -317,7 +323,7 @@ def split_footnotes(page: PageData, ctx: Ctx) -> tuple[list[RawNote], list[Line]
                 stripped = _strip_marker(l, len(m.group(1).strip()))
                 if cur is not None:
                     notes.append(cur)
-                cur = RawNote(marker, [stripped], page.number)
+                cur = RawNote(marker, [stripped], page.number, source=l)
             elif cur is not None:
                 cur.lines.append(l)
             else:
@@ -339,7 +345,7 @@ def split_footnotes(page: PageData, ctx: Ctx) -> tuple[list[RawNote], list[Line]
     if not good:
         return [], page.lines
     # lines of rejected notes go back into the body flow (they are probably captions or table notes)
-    back = [l for n in bad for l in n.lines]
+    back = [n.source if k == 0 and n.source is not None else l for n in bad for k, l in enumerate(n.lines)]
     return good, rest + back
 
 

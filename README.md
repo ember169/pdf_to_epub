@@ -153,7 +153,9 @@ arXiv, un manuel de 1 185 pages, livres de mathématiques, livres scannés d'Int
   linéaire comme description) ; les formules sur une ligne, indices, exposants et fractions en ligne (`a/b`) restent
   du texte.
 - Livres scannés sans sommaire PDF : les chapitres sont trouvés à partir de la mise en page et d'une table des matières
-  imprimée ; les titres gardent leurs erreurs de reconnaissance.
+  imprimée (parties, chapitres numérotés, sections, numéros de page imprimés) ; les titres et le texte gardent une
+  partie de leurs erreurs de reconnaissance, et les notes absentes de la couche OCR manquent.
+- Notes de fin : reliées à leur appel quand celui-ci est en exposant ; un appel mal reconnu reste sans lien.
 - Les figures vectorielles sont converties en images ; la qualité de l'OCR dépend du scan et des langues choisies.
 - Un seul processus serveur ; pas de répartition sur plusieurs machines.
 
@@ -376,8 +378,10 @@ Measured on 18 public-domain or openly licensed PDFs (3,362 pages: novels in Eng
 - Layout analysis is heuristic: complex layouts (nested tables, magazines, marginal notes) may need manual cleanup.
 - Math: no MathML. Two-dimensional formulas become pictures (with the formula as linear text for the description);
   one-line formulas, subscripts, superscripts and inline fractions (`a/b`) stay text.
-- Scanned books without a PDF outline: chapters are found from the page layout and a printed table of contents;
-  titles keep their recognition mistakes.
+- Scanned books without a PDF outline: chapters are found from the page layout and a printed table of contents (parts,
+  numbered chapters, sections, printed page numbers); titles and text keep some recognition mistakes, and notes missing
+  from the OCR layer are missing.
+- Endnotes are linked to their reference when it is a superscript; a misread reference stays unlinked.
 - Vector figures are turned into pictures; OCR quality depends on the scan and the chosen languages.
 - One server process; no spreading across several machines.
 

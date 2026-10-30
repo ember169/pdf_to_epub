@@ -1,5 +1,5 @@
 {
-  "about": "Real-world evaluation corpus. Public-domain / openly licensed PDFs from arXiv, Project Gutenberg and the Internet Archive only. Files live in tests/.corpus/ (git-ignored, never committed); fetch with `python tests/corpus/fetch.py`. Entries with `derive` are built locally from another entry (image-only excerpts for OCR) and are checked against `sha256` only as a warning, since JPEG encoding can differ between Pillow builds.",
+  "about": "Real-world evaluation corpus. Public-domain / openly licensed PDFs from arXiv, Project Gutenberg and the Internet Archive only. Files live in tests/.corpus/ (git-ignored, never committed); fetch with `python tests/corpus/fetch.py`. Entries with `derive` are built locally from another entry (image-only excerpts for OCR) and are checked against `sha256` only as a warning, since JPEG encoding can differ between Pillow builds. Books the user owns (copyrighted) are listed only in the git-ignored tests/.corpus/private/manifest.json (same entry format, plus an optional `gt_file`), so this public file never names them: no URL, never downloaded or committed; fetch.py only checks their sha256 and evaluate.py includes them when present.",
   "documents": [
     {
       "id": "fr-novel-roi-montagnes",

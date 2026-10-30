@@ -13,6 +13,7 @@ from ..ir import ImageItem, Line, PageData, Span, TableItem
 from ..tables import detect_text_tables
 from .base import PdfBackend, PdfDocument
 from .common import (MAX_DECODE_PIXELS, ImageStore, asset_from_pil, cell_text, clamp_scale, clean_text, encode_image,
+                     repair_mojibake, _SPACING_ACCENTS,
                      figures_from_clusters, fix_spacing_accents, is_ocr_font, map_pua, merge_row_fragments,
                      is_math_font, style_from_name, table_from_rows)
 
@@ -54,7 +55,7 @@ class PyMuPDFDocument(PdfDocument):
 
     def metadata(self) -> dict[str, str]:
         m = self.doc.metadata or {}
-        return {"title": m.get("title") or "", "author": m.get("author") or ""}
+        return {"title": repair_mojibake(m.get("title") or ""), "author": repair_mojibake(m.get("author") or "")}
 
     def toc(self):
         out = []
@@ -121,7 +122,14 @@ class PyMuPDFDocument(PdfDocument):
 
     def _lines(self, page, pno: int) -> list[Line]:
         flags = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES & ~pymupdf.TEXT_PRESERVE_LIGATURES
-        data = page.get_text("dict", flags=flags)
+        plain = page.get_text("text", flags=flags | pymupdf.TEXT_INHIBIT_SPACES)
+        nchar = sum(1 for c in plain if not c.isspace() or c == " ")
+        if plain.count(" ") >= 20 and plain.count(" ") >= 0.06 * nchar:
+            # the layer has its own space glyphs (OCR layers, most word processors): they are the word boundaries, and
+            # the gap-based spaces MuPDF adds would split letter-spaced words ("B e r n a r d")
+            data = _spaced_text(page.get_text("rawdict", flags=flags | pymupdf.TEXT_INHIBIT_SPACES))
+        else:
+            data = page.get_text("dict", flags=flags)
         links = self._links(page)
         lines: list[Line] = []
         self._ocr_chars = self._all_chars = 0
@@ -170,6 +178,13 @@ class PyMuPDFDocument(PdfDocument):
                         self._ocr_chars += len(text)
                     spans.append(Span(text, float(s["size"]), bold, italic, sup, sub, mono, tuple(s["bbox"]), link,
                                       is_math_font(s["font"]) and bool(s["text"].strip())))
+                for a, b in zip(spans, spans[1:]):  # a spacing accent in its own span ("G" "´" "EOM"): on its letter
+                    if (len(a.text) == 1 and a.text in _SPACING_ACCENTS and b.text[:1].isalpha() and len(b.text) > 1
+                            and not a.math and not b.math and abs(a.size - b.size) <= 0.5):  # not a hat in a formula
+                        joined = fix_spacing_accents(a.text + b.text)
+                        if joined != a.text + b.text:  # the accent combined with the letter
+                            b.text, a.text = joined, ""
+                spans = [sp for sp in spans if sp.text != ""] or spans
                 lines.append(Line(spans, tuple(ln["bbox"]), pno))
         ocr_layer = self._ocr_chars > 0.5 * max(1, self._all_chars)
         return merge_row_fragments(lines, 2.0 if ocr_layer else 0.45)
@@ -291,3 +306,29 @@ class PyMuPDFDocument(PdfDocument):
             clusters, pno, pd.width, pd.height, pd.lines, pd.images, pd.tables,
             lambda r: self._render_region(page, pymupdf.Rect(r), 200), store, shapes,
         )
+
+
+def _spaced_text(data: dict) -> dict:
+    """rawdict -> dict-like spans ("text"): the layer's own spaces, plus one where a gap is well above the line's
+    letter spacing (a space glyph the layer lacks)."""
+    for block in data.get("blocks", []):
+        for ln in block.get("lines", []):
+            chars = [c for s in ln.get("spans", []) for c in s.get("chars", [])]
+            size = max((s["size"] for s in ln.get("spans", [])), default=10.0)
+            gaps = sorted(g for a, b in zip(chars, chars[1:]) if a["c"].strip() and b["c"].strip()
+                          and (g := b["bbox"][0] - a["bbox"][2]) < 0.25 * size)  # letter spacing, not word gaps
+            track = max(0.0, gaps[(len(gaps) - 1) // 2]) if gaps else 0.0
+            wide = max(0.18 * size, 2.5 * track + 0.05 * size)
+            prev, prev_math = None, False
+            for s in ln.get("spans", []):
+                out = []
+                math = is_math_font(s.get("font", ""))
+                for c in s.get("chars", []):
+                    # between math-font glyphs the usual narrow gap is a space (formulas have no space glyphs)
+                    need = 0.12 * size if (math or prev_math) else wide
+                    if prev is not None and c["c"].strip() and prev["c"].strip() and c["bbox"][0] - prev["bbox"][2] >= need:
+                        out.append(" ")
+                    out.append(c["c"])
+                    prev, prev_math = c, math
+                s["text"] = "".join(out)
+    return data

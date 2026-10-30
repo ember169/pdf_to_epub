@@ -22,7 +22,6 @@ from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFParser
 from pdfminer.pdftypes import resolve1
 from pdfminer.psparser import PSLiteral
-from pdfminer.utils import decode_text
 
 from ...api import ConversionError
 from ..ir import ImageItem, Line, PageData, Span
@@ -30,6 +29,7 @@ from ..tables import detect_text_tables
 from .base import PDFIUM_LOCK, PdfBackend, PdfDocument
 from .common import MAX_DECODE_PIXELS as _MAX_DECODE
 from .common import (CID_RE, MAX_IMAGE_DIM, ImageStore, asset_from_pil, clamp_scale, clean_text, cluster_rects,
+                     decode_pdf_string, repair_mojibake,
                      figures_from_clusters, fix_spacing_accents, is_ocr_font, map_pua, merge_row_fragments,
                      is_math_font, ruled_tables_from_segments, style_from_name)
 
@@ -189,9 +189,9 @@ class PdfMinerDocument(PdfDocument):
             for k in ("title", "author"):
                 v = resolve1(info.get(k.capitalize()))
                 if isinstance(v, bytes):
-                    out[k] = decode_text(v).strip()
+                    out[k] = decode_pdf_string(v).strip()
                 elif isinstance(v, str):
-                    out[k] = v.strip()
+                    out[k] = repair_mojibake(v).strip()
         return out
 
     def _page_dims(self, page) -> tuple[float, float, float, float]:
@@ -245,7 +245,7 @@ class PdfMinerDocument(PdfDocument):
         for level, title, dest, action, _se in outlines:
             try:
                 if isinstance(title, bytes):
-                    title = decode_text(title)
+                    title = decode_pdf_string(title)
                 target = None
                 if dest is not None:
                     target = self._resolve_dest(dest)
@@ -372,13 +372,17 @@ class PdfMinerDocument(PdfDocument):
         for item in layout:
             walk(item)
         pd.has_graphics = flags["graphics"]
-        nchar = nocr = 0
+        nchar = nocr = nspace = 0
         for tl in text_lines:
             for c in tl:
                 if isinstance(c, LTChar):
                     nchar += 1
                     nocr += is_ocr_font(str(c.fontname))
+                    nspace += c.get_text() == " "
         pd.ocr_layer = nocr > 0.5 * nchar
+        # the layer has its own space glyphs (OCR layers, most word processors): they are the word boundaries, and the
+        # gap-based spaces pdfminer adds would split letter-spaced words ("B e r n a r d")
+        self._spaced = nspace >= 20 and nspace >= 0.06 * nchar
         self._observe_advances(text_lines)
         links = self._links(page, H)
         fontinfo = self.device.fontinfo
@@ -468,10 +472,16 @@ class PdfMinerDocument(PdfDocument):
         cur: Span | None = None
         prev_x1 = None
         boxes: list[tuple[float, float, float, float]] = []
+        spaced = getattr(self, "_spaced", False)
+        if spaced:  # a missing space glyph still shows as a gap well above the line's own letter spacing
+            gaps = sorted(g for a, b in zip(chars, chars[1:]) if a.get_text().strip() and b.get_text().strip()
+                          and (g := b.x0 - a.x1) < 0.25 * maxsize)  # letter spacing, not word gaps
+            track = max(0.0, gaps[(len(gaps) - 1) // 2]) if gaps else 0.0
+            wide_gap = max(0.18 * maxsize, 2.5 * track + 0.05 * maxsize)
         for it in tl:
             if isinstance(it, LTAnno):
                 t = it.get_text()
-                if cur is not None and not cur.mono and t == " " and not cur.text.endswith(" "):
+                if not spaced and cur is not None and not cur.mono and t == " " and not cur.text.endswith(" "):
                     cur.text += " "
                 continue
             if not isinstance(it, LTChar) or not _horizontal(it):
@@ -520,6 +530,9 @@ class PdfMinerDocument(PdfDocument):
             elif (not mono and prev_x1 is not None and txt.strip() and cur is not None and cur.mono
                   and x0 - prev_x1 > 0.15 * it.size and not cur.text.endswith(" ")):
                 txt = " " + txt  # prose resuming right after an inline code span
+            elif (spaced and prev_x1 is not None and txt.strip() and cur is not None and not cur.text.endswith(" ")
+                  and x0 - prev_x1 >= (0.12 * maxsize if (math or cur.math) else wide_gap)):  # formulas: no space glyphs
+                txt = " " + txt
             prev_x1 = x1
             link = None
             if links and txt.strip():

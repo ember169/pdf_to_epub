@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from . import openings
-from .ir import (Block, Chapter, Figure, Footnote, Heading, Line, ListBlock, Paragraph, Run, Table)
+from .ir import (Block, Chapter, Endnotes, Figure, Footnote, Heading, Line, ListBlock, Paragraph, Run, Table)
 from .layout import BULLET_RE, GLYPH_BULLET_RE, TERMINAL_RE, Ctx, RawBlock, RawNote, is_centered
 
 _HYPHENS = "-­‐‑"
@@ -24,7 +24,7 @@ _CAPTION_RE = re.compile(r"^\s*(fig(?:ure|\.)?|figure|tableau|table|abb(?:ildung
 # Runs
 # ---------------------------------------------------------------------------
 def _style(r: Run) -> tuple:
-    return (r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref, r.display, r.image, r.eqno)
+    return (r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref, r.display, r.image, r.eqno, r.pagebreak)
 
 
 _PLAIN = _style(Run(""))
@@ -51,7 +51,7 @@ def normalize_runs(pieces: list[Run]) -> list[Run]:
     for r in exploded:
         r.text = _LEADER_RE.sub(" … ", r.text) if "..." in r.text or ". ." in r.text else r.text
         r.text = re.sub(r"[ \t\r\n   ]+", " ", r.text)
-    exploded = [r for r in exploded if r.text != ""]
+    exploded = [r for r in exploded if r.text != "" or r.pagebreak]
     # whitespace-only pieces take the style of identical neighbours
     for i, r in enumerate(exploded):
         if r.text.strip() == "" and 0 < i < len(exploded) - 1 and r.image is None:
@@ -69,7 +69,7 @@ def normalize_runs(pieces: list[Run]) -> list[Run]:
     # move edge whitespace out of styled runs
     out: list[Run] = []
     for r in merged:
-        if _style(r) == _PLAIN or r.image is not None:
+        if _style(r) == _PLAIN or r.image is not None or r.pagebreak:
             out.append(r)
             continue
         lead = len(r.text) - len(r.text.lstrip())
@@ -95,16 +95,16 @@ def normalize_runs(pieces: list[Run]) -> list[Run]:
     if final:
         final[0].text = final[0].text.lstrip()
         final[-1].text = final[-1].text.rstrip()
-    final = [r for r in final if r.text]
+    final = [r for r in final if r.text or r.pagebreak]
     # drop spaces around "start of block" duplicates (e.g. " " after a plain run ending in space)
     for a, b in zip(final, final[1:]):
         if a.text.endswith(" ") and b.text.startswith(" "):
             b.text = b.text.lstrip()
-    return [r for r in final if r.text]
+    return [r for r in final if r.text or r.pagebreak]
 
 
 def _clone(r: Run, text: str) -> Run:
-    return Run(text, r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref, r.display, r.image, r.eqno)
+    return Run(text, r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref, r.display, r.image, r.eqno, r.pagebreak)
 
 
 def _last_word(runs: list[Run]) -> str:
@@ -361,6 +361,17 @@ def merge_code_blocks(blocks: list[Block]) -> list[Block]:
     return out
 
 
+def garbled_heading(text: str) -> bool:
+    """A heading shape OCR noise has: under 60 % letters, or a word glued across a case change ("MeeISLAND")."""
+    t = text.strip()
+    letters = sum(c.isalpha() for c in t)
+    nonspace = sum(not c.isspace() for c in t)
+    if re.fullmatch(r"[\dIVXLCivxlc]+(?:[.\-][\dA-Za-z]{1,3})*\.?", t):  # numbering only ("II", "1.B.")
+        return False
+    return (not nonspace or letters < 0.6 * nonspace
+            or re.search(r"\b[A-ZÀ-Þ]?[a-zà-ÿ]{2,}[A-ZÀ-Þ]{3,}", t) is not None)
+
+
 def convert_blocks(raw: list[RawBlock], ctx: Ctx, notes: dict[int, list[RawNote]],
                    headings: HeadingModel, plan=None) -> tuple[list[Block], dict[str, Footnote]]:
     """Convert layout blocks to IR blocks (headings/paragraphs/quotes/pre/tables/figures) and footnotes. `plan`
@@ -388,6 +399,10 @@ def convert_blocks(raw: list[RawBlock], ctx: Ctx, notes: dict[int, list[RawNote]
                 out.append(Paragraph(runs, "dmath", b.page, b.y0, b.break_before, False, ctx.body_size, y1=it.bbox[3]))
                 continue
             out.append(Figure(it.image_id, "", None, b.page, b.y0, b.break_before))
+            continue
+        if b.kind == "endnotes":
+            from .endnotes import footnotes_of
+            out.append(Endnotes(footnotes_of(b.item, runs_from_lines, ctx), b.page, b.y0, b.break_before))
             continue
         if b.kind == "table":
             t = b.item
@@ -421,6 +436,9 @@ def convert_blocks(raw: list[RawBlock], ctx: Ctx, notes: dict[int, list[RawNote]
                     r.noteref = ids[r.text.strip()]
                     used.add(r.text.strip())
         rank = headings.classify(b)
+        if rank is not None and b.ocr and (garbled_heading(plain(runs)) or (plan is not None and not chapter_title)
+                                           or b.page in ctx.sparse_pages):
+            rank = None  # OCR noise ("MeeISLAND PLANT", "_i"), front matter of a planned book, a title page / plate line
         if rank is not None:
             for r in runs:
                 r.bold = False
@@ -508,18 +526,43 @@ def merge_across_breaks(blocks: list[Block], ctx: Ctx) -> list[Block]:
             k -= 1
         floats = out[k + 1:]
         broken = b.break_before in ("page", "column") or any(f.break_before in ("page", "column") for f in floats)
-        if (k >= 0 and isinstance(b, Paragraph) and isinstance(out[k], Paragraph) and broken
-                and b.kind == out[k].kind == "p" and (not floats or (plain(b.runs)[:1].islower()))):
+        # a lowercase start ("et la suite …", "– disait-il …") continues the sentence, whatever the indentation
+        low = isinstance(b, Paragraph) and re.match(r"^(?:[–—-]\s*)?[^\W\d_A-ZÀ-Þ]", plain(b.runs)) is not None
+        kinds = (isinstance(b, Paragraph) and k >= 0 and isinstance(out[k], Paragraph)
+                 and (b.kind == out[k].kind in ("p", "blockquote") or (low and out[k].kind == "blockquote" and b.kind == "p")))
+        if k >= 0 and kinds and broken and (not floats or low):
             prev = out[k]
             ptxt = plain(prev.runs)
             ctxt = plain(b.runs)
-            if (ptxt and ctxt and abs(prev.size - b.size) <= 0.8 and not b.indented
-                    and (not TERMINAL_RE.search(ptxt) or ptxt[-1] in _HYPHENS)
+            if (ptxt and ctxt and abs(prev.size - b.size) <= 0.8 and (not b.indented or low or b.kind == "blockquote")
+                    and (not TERMINAL_RE.search(ptxt) or ptxt[-1] in _HYPHENS or (low and ptxt[-1] == "."))
                     and not _marker(ctxt)):
-                prev.runs = normalize_runs(join_runs(prev.runs, b.runs, ctx))
+                joined = join_runs(prev.runs, b.runs, ctx)
+                if b.page != (prev.last_page or prev.page):  # where the next page begins, for the page list
+                    _insert_between_words(joined, min(len(prev.runs), len(joined)), Run("", pagebreak=b.page))
+                prev.runs = normalize_runs(joined)
+                prev.last_page = b.page
                 continue
         out.append(b)
     return out
+
+
+def _insert_between_words(runs: list[Run], i: int, marker: Run) -> None:
+    """Insert `marker` at run index `i`, moved forward to the next space when `i` falls inside a word (a word
+    hyphenated across the page break: "phy-" / "siologie" is one word, the marker goes after it)."""
+    before = "".join(r.text for r in runs[:i])
+    after = "".join(r.text for r in runs[i:])
+    if not (before[-1:].strip() and after[:1].strip()):  # already between words
+        runs.insert(i, marker)
+        return
+    for k in range(i, len(runs)):
+        r = runs[k]
+        j = r.text.find(" ") if not r.image else -1
+        if j >= 0:
+            head, tail = _clone(r, r.text[:j + 1]), _clone(r, r.text[j + 1:])
+            runs[k:k + 1] = [head, marker] + ([tail] if tail.text else [])
+            return
+    runs.append(marker)
 
 
 def group_lists(blocks: list[Block]) -> list[Block]:
@@ -660,11 +703,12 @@ def assign_ids(blocks: list[Block]) -> None:
             b.id = f"b{n}"
 
 
-def build_chapters(blocks: list[Block], toc: list[TocEntry], npages: int, doc_title: str, warnings: list[str]) -> list[Chapter]:
+def build_chapters(blocks: list[Block], toc: list[TocEntry], npages: int, doc_title: str, warnings: list[str],
+                   split_level: int | None = None) -> list[Chapter]:
     assign_ids(blocks)
-    starts: list[tuple[int, str, bool]] = []  # (block index, title, title_is_heading)
+    starts: list[tuple[int, str, bool, int]] = []  # (block index, title, title_is_heading, toc level)
     nav_extra: list[tuple[int, str, int]] = []  # (level, title, block idx)
-    L = _pick_split_level(toc, npages) if toc else None
+    L = (split_level or _pick_split_level(toc, npages)) if toc else None
     if L is not None:
         page_first: dict[int, int] = {}
         page_last: dict[int, int] = {}
@@ -701,7 +745,7 @@ def build_chapters(blocks: list[Block], toc: list[TocEntry], npages: int, doc_ti
             if e.level <= L:
                 if starts and starts[-1][0] == idx:
                     continue
-                starts.append((idx, e.title, is_h))
+                starts.append((idx, e.title, is_h, e.level))
                 prev_idx = idx
             else:
                 nav_extra.append((e.level, e.title, idx))
@@ -712,7 +756,7 @@ def build_chapters(blocks: list[Block], toc: list[TocEntry], npages: int, doc_ti
         if split is not None:
             for i, b in enumerate(blocks):
                 if isinstance(b, Heading) and b.level <= split and not b.weak:
-                    starts.append((i, plain(b.runs), True))
+                    starts.append((i, plain(b.runs), True, 1))
 
     chapters: list[Chapter] = []
     if not starts:
@@ -727,8 +771,9 @@ def build_chapters(blocks: list[Block], toc: list[TocEntry], npages: int, doc_ti
         if starts[0][0] > 0:
             chapters.append(Chapter(doc_title, blocks[: starts[0][0]], first_page=blocks[0].page))
         bounds = [s[0] for s in starts] + [len(blocks)]
-        for k, (idx, title, is_h) in enumerate(starts):
+        for k, (idx, title, is_h, lvl) in enumerate(starts):
             ch = Chapter(title, blocks[idx:bounds[k + 1]], first_page=blocks[idx].page if idx < len(blocks) else 1)
+            ch.nav_level = max(1, lvl - (min(s[3] for s in starts) - 1))
             ch.title_is_heading = is_h and bool(ch.blocks) and isinstance(ch.blocks[0], Heading)
             if is_h and ch.blocks and not isinstance(ch.blocks[0], Heading):
                 ch.title_is_heading = False
@@ -809,6 +854,7 @@ def _split_long(chapters: list[Chapter], max_chars: int = 400_000) -> list[Chapt
             if not seg:
                 continue
             sub = Chapter(f"{ch.title} ({k + 1})" if k else ch.title, seg, first_page=seg[0].page)
+            sub.nav_level = ch.nav_level
             sub.title_is_heading = k == 0 and ch.title_is_heading
             sub.sections = [s for s in ch.sections if any(b.id == s[2] for b in seg)]
             out.append(sub)
@@ -955,3 +1001,33 @@ def clean_meta_title(t: str | None) -> str | None:
     if re.match(r"(?i)^(microsoft word|untitled|document\d*|slide \d+|powerpoint presentation)", t):
         return None
     return t[:300]
+
+
+def mark_pages(chapters: list[Chapter], labels: dict[int, str]) -> None:
+    """A page-break marker where each labelled page begins: inside a paragraph that runs across the break (set by
+    `merge_across_breaks`), otherwise at the start of the page's first block."""
+    if not labels:
+        return
+    seen: set[int] = set()
+    for ch in chapters:
+        for b in ch.blocks:
+            for r in getattr(b, "runs", []) or []:
+                if r.pagebreak:
+                    seen.add(r.pagebreak)
+    for ch in chapters:
+        out = []
+        for b in ch.blocks:
+            p = getattr(b, "page", 0)
+            if p in labels and p not in seen:
+                seen.add(p)
+                if isinstance(b, (Paragraph, Heading)):
+                    b.runs = [Run("", pagebreak=p)] + b.runs
+                else:
+                    out.append(Paragraph([Run("", pagebreak=p)], "pagebreak", p, getattr(b, "y0", 0.0)))
+            out.append(b)
+        ch.blocks = out
+    for ch in chapters:  # markers that do not belong to a labelled page go
+        for b in ch.blocks:
+            if getattr(b, "runs", None):
+                b.runs = [r for r in b.runs if not r.pagebreak or r.pagebreak in labels]
+

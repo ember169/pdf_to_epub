@@ -33,6 +33,23 @@ Metrics (all on normalised text: NFKC, lower case, intra-word hyphens and soft h
   crops, crop_bleed, crop_clip  formula pictures checked against pdfium's glyph boxes (the conversion worker records each crop):
                                 pictures crossed by a glyph of another line; pictures cutting one of the formula's own
                                 glyphs or with ink on a 1-px border row/column (crop_edge_ink alone in results.json)
+  lspaced                       letter-spaced runs ("f e m m es", "2 0 1 0": 4+ single characters in a row), per 10k words
+  glued                         words glued together ("ofCalifornia", two reference words as one), per 10k words
+  split_words, joined_words     a word cut in two (together a reference word, never side by side there) / two reference words that
+                                stand side by side in the reference run together, per 10k words (a page-break marker
+                                inside a word counts as a cut)
+  noterefs / sup_unlinked       note references linked in the EPUB / superscript numbers left without a link
+  note_items                    notes in the EPUB (endnote list items + footnote asides)
+  junk_imgs                     pictures that are blank, uniform, specks only or almost entirely black
+  lower_starts                  paragraphs / quotes starting in lower case (or "– lower") after another one, per 1000
+  pagelist                      page-list entries (printed page numbers) per PDF page
+  gt_units, spine_units, spine_docs, nav_recall, nav_precision, title_ok
+                                private books with a hand-checked structure (manifest `gt_file`, git-ignored): parts /
+                                chapters / introduction / epilogue that open a spine document, spine documents, share of
+                                units + sections + front matter in the navigation, share of navigation entries that are
+                                one of them (or Notes / Bibliographie / the book title), dc:title right
+  nav_garbled, nav_unsupported  navigation entries shaped like OCR noise (< 60 % letters, "MeeISLAND"); entries matching no
+                                outline / hand-checked title (first entry and Notes / Bibliographie / Conclusion excepted)
   img_pdf / img_epub            distinct embedded images (>=48 px, not full-page scans) vs images in the EPUB
   epubcheck                     ERROR+FATAL count (java, or the pdftoepub-test Docker image), -1 when not run
   s_per_page, rss_mb            wall time per page and peak resident memory of the conversion process
@@ -196,11 +213,17 @@ def read_epub(path: Path) -> dict:
     headings = collections.Counter()
     n_img = n_formula = n_subsup = 0
     first_heads = []  # first heading of each content document
+    extra = collections.Counter()  # noterefs, unlinked superscript numbers, endnote items, lowercase starts, junk images
+    import io
+
+    from PIL import Image, ImageStat
     for ci, href in enumerate(spine):
         raw = z.read(base + href)
         # "x<sup>2</sup>" is "x" and "2" (as in the PDF text layer), not the word "x2"; a formula picture's text is its
         # alt text (linearised), which readers and screen readers expose
         raw = re.sub(rb"<(/?)(sub|sup)>", lambda m: b" <" + m.group(1) + m.group(2) + b"> ", raw)
+        # a page-break marker is a boundary for text tools (search, read-aloud): one inside a word splits it
+        raw = re.sub(rb'<span epub:type="pagebreak"[^>]*></span>', b" ", raw)
         raw = re.sub(rb'(<img class="formula"[^>]*?alt=")([^"]*)("[^>]*/>)', rb"\1\2\3<span> \2 </span>", raw)
         root = etree.fromstring(raw)
         if not href.endswith("nav.xhtml"):
@@ -212,6 +235,25 @@ def read_epub(path: Path) -> dict:
             if tag == "img":
                 n_img += 1
                 n_formula += "formula" in (el.get("class") or "").split()
+                if "formula" not in (el.get("class") or "").split():
+                    try:  # a page picture that is blank / uniform / specks only
+                        im = Image.open(io.BytesIO(z.read(base + (href.rsplit("/", 1)[0] + "/" if "/" in href else "")
+                                                          + el.get("src")))).convert("L")
+                        im.thumbnail((200, 200))
+                        st = ImageStat.Stat(im)
+                        dark = sum(im.histogram()[:128]) / max(1, im.width * im.height)
+                        extra["junk_imgs"] += st.stddev[0] < 8 or dark < 0.004 or dark > 0.85
+                    except Exception:  # noqa: BLE001
+                        pass
+            if tag == "a" and el.get("{http://www.idpf.org/2007/ops}type") == "noteref":
+                extra["noterefs"] += 1
+            if tag == "sup" and re.fullmatch(r"\s*\d{1,3}\s*", "".join(el.itertext())) and not any(
+                    isinstance(a.tag, str) and a.tag.endswith("}a") for a in el.iterancestors()):
+                extra["sup_unlinked"] += 1
+            if tag == "li" and el.get("{http://www.idpf.org/2007/ops}type") in ("endnote", "footnote"):
+                extra["note_items"] += 1
+            if tag == "aside" and el.get("{http://www.idpf.org/2007/ops}type") in ("footnote", "endnote"):
+                extra["note_items"] += 1
             if tag in ("sub", "sup"):
                 n_subsup += 1
             if tag in BLOCK_TAGS:
@@ -235,9 +277,22 @@ def read_epub(path: Path) -> dict:
         for n in nav.iter(XHTML + "nav"):
             if n.get("{http://www.idpf.org/2007/ops}type") == "toc":
                 nav_titles = ["".join(a.itertext()).strip() for a in n.iter(XHTML + "a")]
+            if n.get("{http://www.idpf.org/2007/ops}type") == "page-list":
+                extra["pagelist"] = sum(1 for _ in n.iter(XHTML + "a"))
+    dc_title = "".join(t.text or "" for t in opf.iterfind(".//{http://purl.org/dc/elements/1.1/}title"))
     chapters = sum(1 for h in spine if not h.endswith("nav.xhtml"))
+    # paragraphs / quotes starting in lower case after another one: the rest of a sentence cut at a page break
+    prev = None
+    for tag, text, _ in blocks:
+        t = text.strip()
+        if tag in ("p", "blockquote/p") and t:
+            if prev in ("p", "blockquote/p") and re.match(r"^(?:[–—-]\s*)?[^\W\d_A-ZÀ-Þ]", t):
+                extra["lower_starts"] += 1
+            extra["paras_all"] += 1
+        prev = tag if t else prev
     return {"blocks": blocks, "headings": dict(headings), "images": n_img, "nav": nav_titles, "chapters": chapters,
-            "first_heads": first_heads, "formula_imgs": n_formula, "sub_sup": n_subsup}
+            "first_heads": first_heads, "formula_imgs": n_formula, "sub_sup": n_subsup, "extra": dict(extra),
+            "dc_title": dc_title}
 
 
 # ---------------------------------------------------------------- metrics
@@ -253,8 +308,19 @@ def is_pnum(text: str) -> bool:
 
 def title_key(text: str) -> str:
     text = re.sub(r"^\s*(chapter|chapitre|part|partie|book|livre)?\s*[ivxlc\d]+\s*[.:—–-]\s*", "", norm(text))  # "II. The ..."
+    text = re.sub(r"^\s*\w+(?:e|ème)?\s+partie\s*[.:—–-]\s*", "", text)  # "Deuxième partie — Les villes"
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z]", "", text)
+
+
+def garbled(text: str) -> bool:
+    t = text.strip()
+    letters = sum(c.isalpha() for c in t)
+    nonspace = sum(not c.isspace() for c in t)
+    if re.fullmatch(r"[\dIVXLCivxlc]+(?:[.\-][\dA-Za-z]{1,3})*\.?", t):  # numbering only ("II", "1.B.")
+        return False
+    return (not nonspace or letters < 0.6 * nonspace
+            or re.search(r"\b[A-ZÀ-Þ]?[a-zà-ÿ]{2,}[A-ZÀ-Þ]{3,}", t) is not None)
 
 
 def same_title(a: str, b: str) -> bool:
@@ -277,6 +343,24 @@ def chapter_metrics(gt: dict, ep: dict) -> dict:
     stray = sum(1 for h in ep["first_heads"] if not any(same_title(t, h) for t in l1 + l2))
     return {"gt_chapters": len(l1), "ch_found": found, "sec_found": sec if l2 else None, "gt_sections": len(l2),
             "ch_spurious": max(0, stray - 1)}
+
+
+def private_gt_metrics(gt: dict, ep: dict) -> dict:
+    """Against a hand-checked structure (private book): spine documents per unit, navigation precision / recall,
+    metadata title."""
+    units = gt.get("units", [])
+    sections = [s for u in units for s in u.get("sections", [])]
+    heads = ep["first_heads"]
+    spine_hit = sum(1 for u in units if any(same_title(u["title"], h) for h in heads))
+    nav = ep["nav"]
+    items = [u["title"] for u in units] + sections + [f["title"] for f in gt.get("front_matter", [])]
+    generic = ("notes", "bibliographie", "bibliography", "conclusion", "references", "references")
+    nav_ok = sum(1 for n in nav if any(same_title(t, n) for t in items) or title_key(n) in generic
+                 or same_title(n, gt.get("metadata", {}).get("title", "")))
+    return {"gt_units": len(units), "spine_units": spine_hit, "spine_docs": ep["chapters"],
+            "nav_recall": sum(1 for t in items if any(same_title(t, n) for n in nav)) / max(1, len(items)),
+            "nav_precision": nav_ok / max(1, len(nav)),
+            "title_ok": int(same_title(ep.get("dc_title", ""), gt.get("metadata", {}).get("title", "")))}
 
 
 def metrics(ref: dict, ep: dict, gt: dict | None = None) -> dict:
@@ -401,12 +485,61 @@ def metrics(ref: dict, ep: dict, gt: dict | None = None) -> dict:
         m["outline_match"] = hit / len(outline)
     else:
         m["outline_match"] = None
+    # navigation entries that are OCR noise (under 60 % letters, a word glued across a case change: "MeeISLAND"), and,
+    # when an outline or a hand-checked structure exists, entries supported by neither
+    m["nav_garbled"] = sum(1 for t in ep["nav"] if garbled(t))
+    known = [o["title"] or "" for o in outline]
+    if gt and "level1" in gt:
+        known += [g["title"] for g in gt["level1"] + gt.get("level2", [])]
+    if known:
+        generic = {"notes", "bibliographie", "bibliography", "references", "conclusion", "index", "contents"}
+        kn = [re.sub(r"\W+", " ", norm(k)).strip() for k in known]
+
+        def supported(t: str) -> bool:
+            n = re.sub(r"\W+", " ", norm(t)).strip()
+            return any(k and (k[:40] in n or n[:40] in k) for k in kn) or any(same_title(k, t) for k in known)
+        m["nav_unsupported"] = sum(1 for t in ep["nav"][1:] if title_key(t) not in generic and not supported(t))
+    else:
+        m["nav_unsupported"] = None
     m["img_pdf"] = sum(p["images"] for p in pages)
     m["img_epub"] = ep["images"]
     m["formula_imgs"] = ep["formula_imgs"]
     m["sub_sup"] = ep["sub_sup"]
-    if gt:
+    ex = ep.get("extra", {})
+    nw = max(1, len(out_words))
+    # letter-spaced runs ("f e m m es", "2 0 1 0") and words glued together ("ofCalifornia"), per 10k words
+    flat = " ".join(b[1] for b in ep["blocks"])
+    m["lspaced"] = 10000 * len(re.findall(r"(?<!\w)(?:\w ){3,}\w+", flat)) / nw
+    rv = collections.Counter(words(ref_text))
+    glued = 0
+    for w, c in collections.Counter(out_words).items():
+        if len(w) >= 7 and rv[w] == 0 and any(rv[w[:i]] >= 2 and rv[w[i:]] >= 2 for i in range(2, len(w) - 1)):
+            glued += c
+    glued += len(re.findall(r"(?<![^\W\d_])[a-zà-ÿ]{2,}[A-ZÀ-Þ][a-zà-ÿ]{2,}", flat))  # "ofCalifornia", "theRightto"
+    m["glued"] = 10000 * glued / nw
+    # words cut in two ("con naissance": together a reference word, never two words there) and two reference words run together
+    # ("lacritique", seen side by side in the reference), per 10k words
+    ref_words = words(ref_text)
+    bigrams = set(zip(ref_words, ref_words[1:]))
+    glued_ref = {w.lower() for w in re.findall(r"[a-zà-ÿ]{2,}[A-ZÀ-Þ][a-zà-ÿ]+", ref_text)}  # the reference's own glue
+    split = sum(1 for a, b in zip(out_words, out_words[1:])
+                if rv[a + b] > 0 and (a, b) not in bigrams and a + b not in glued_ref)
+    joined = 0
+    for w in out_words:
+        if len(w) >= 4 and rv[w] == 0 and any((w[:i], w[i:]) in bigrams for i in range(1, len(w))):
+            joined += 1
+    m["split_words"] = 10000 * split / nw
+    m["joined_words"] = 10000 * joined / nw
+    m["noterefs"] = ex.get("noterefs", 0)
+    m["sup_unlinked"] = ex.get("sup_unlinked", 0)
+    m["note_items"] = ex.get("note_items", 0)
+    m["junk_imgs"] = ex.get("junk_imgs", 0)
+    m["lower_starts"] = 1000 * ex.get("lower_starts", 0) / max(1, ex.get("paras_all", 0))
+    m["pagelist"] = ex.get("pagelist", 0) / max(1, len(pages))
+    if gt and "level1" in gt:
         m.update(chapter_metrics(gt, ep))
+    elif gt and "units" in gt:
+        m.update(private_gt_metrics(gt, ep))
     return m
 
 
@@ -581,7 +714,9 @@ def run_worker(doc: dict, pdf: Path, epub: Path, backend: str, timeout: int, src
 HEAD = ["doc", "backend", "pages", "word_recall", "word_precision", "char_recall", "pre_share", "pua", "order", "order_2col", "mid_breaks",
         "hyph_left", "hyph_joined", "hdr_leak", "pnum_leak", "outline", "nav", "chapters", "headings", "outline_match",
         "headings_per_page", "chapters_per_100p", "gt_chapters", "ch_found", "sec_found", "ch_spurious", "img_pdf", "img_epub",
-        "formula_imgs", "crops", "crop_bleed", "crop_clip", "sub_sup", "epubcheck", "s_per_page", "rss_mb"]
+        "formula_imgs", "crops", "crop_bleed", "crop_clip", "sub_sup", "lspaced", "glued", "split_words", "joined_words", "noterefs", "sup_unlinked",
+        "note_items", "junk_imgs", "lower_starts", "pagelist", "gt_units", "spine_units", "spine_docs", "nav_recall",
+        "nav_precision", "title_ok", "nav_garbled", "nav_unsupported", "epubcheck", "s_per_page", "rss_mb"]
 
 
 def fmt(v) -> str:
@@ -682,6 +817,9 @@ def main(argv: list[str] | None = None) -> int:
 
     backends = args.backends.split(",") if args.backends else ["pdfminer"] + (["pymupdf"] if importlib.util.find_spec("pymupdf") else [])
     manifest = json.loads((HERE / "manifest.json").read_text())
+    private = CORPUS / "private" / "manifest.json"  # git-ignored: copyrighted books the user owns (see fetch.py)
+    if private.exists():
+        manifest["documents"] += [{**d, "private": True} for d in json.loads(private.read_text())["documents"]]
     docs = [d for d in manifest["documents"] if not args.ids or d["id"] in args.ids]
     by_id = {d["id"]: d for d in manifest["documents"]}
     d_out = OUT / args.label
@@ -691,9 +829,9 @@ def main(argv: list[str] | None = None) -> int:
     results_path = d_out / "results.json"
     rows = json.loads(results_path.read_text()) if results_path.exists() else []
     for doc in docs:
-        pdf = CORPUS / f"{doc['id']}.pdf"
+        pdf = CORPUS / doc.get("file", f"{doc['id']}.pdf")
         if not pdf.exists():
-            print(f"skip {doc['id']}: not fetched (run fetch.py)")
+            print(f"skip {doc['id']}: " + ("private file absent" if doc.get("private") else "not fetched (run fetch.py)"))
             continue
         rc = ref_cache / f"{doc['id']}.json"
         if rc.exists() and rc.stat().st_mtime > max(pdf.stat().st_mtime, Path(__file__).stat().st_mtime):
@@ -717,7 +855,10 @@ def main(argv: list[str] | None = None) -> int:
                 res = run_worker(doc, pdf, epub, be, args.timeout, args.src)
             row = {"doc": doc["id"], "backend": be, **res}
             if res.get("ok"):
-                row.update(metrics(ref, read_epub(epub), doc.get("chapters_gt")))
+                gt = doc.get("chapters_gt")
+                if doc.get("gt_file") and (CORPUS / doc["gt_file"]).exists():
+                    gt = json.loads((CORPUS / doc["gt_file"]).read_text())
+                row.update(metrics(ref, read_epub(epub), gt))
                 row.update(crop_check(pdf, epub))
                 row["epubcheck"] = old.get("epubcheck", -1) if args.rescore else epubcheck(epub, args.epubcheck)
                 row["s_per_page"] = res["seconds"] / max(1, res["pages"])

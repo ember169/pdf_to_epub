@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
-from .ir import Chapter, Document, Figure, Footnote, Heading, ListBlock, Paragraph, Run, Table
+from .ir import Chapter, Document, Endnotes, Figure, Footnote, Heading, ListBlock, Paragraph, Run, Table
 
 XHTML_NS = "http://www.w3.org/1999/xhtml"
 EPUB_NS = "http://www.idpf.org/2007/ops"
@@ -21,6 +21,10 @@ h1 { font-size: 1.7em; margin: 1.4em 0 0.8em 0; }
 h2 { font-size: 1.4em; margin: 1.3em 0 0.6em 0; }
 h3 { font-size: 1.2em; margin: 1.2em 0 0.5em 0; }
 h4 { font-size: 1.05em; margin: 1.1em 0 0.4em 0; }
+p.byline { font-style: italic; margin: 0.2em 0 1.2em 0; text-indent: 0; }
+p.credit { font-size: 0.9em; font-style: italic; text-indent: 0; }
+section.endnotes { font-size: 0.9em; }
+section.endnotes p { text-indent: 0; margin: 0.2em 0; }
 p { margin: 0 0 0.9em 0; orphans: 2; widows: 2; }
 blockquote { margin: 1em 2em; }
 blockquote p { margin: 0 0 0.6em 0; }
@@ -128,6 +132,14 @@ class Writer:
         return None
 
     def _styled(self, r: Run, in_link: bool = False) -> str:
+        if r.pagebreak:
+            label = self.doc.page_labels.get(r.pagebreak, "")
+            done = self.__dict__.setdefault("_pages_done", set())
+            if not label or r.pagebreak in done:  # a marker copied into two blocks: the first one only
+                return ""
+            done.add(r.pagebreak)
+            self.__dict__.setdefault("_pages_written", []).append((r.pagebreak, label, getattr(self, "_cur_file", "")))
+            return f'<span epub:type="pagebreak" role="doc-pagebreak" id="page-{r.pagebreak}" aria-label="{attr(label)}"></span>'
         s = esc(r.text)
         if r.mono:
             s = f"<code>{s}</code>"
@@ -157,6 +169,10 @@ class Writer:
                 return f"<pre{ida}><code>{esc(''.join(r.text for r in b.runs))}</code></pre>"
             if b.kind == "blockquote":
                 return f"<blockquote{ida}><p>{self.runs(b.runs)}</p></blockquote>"
+            if b.kind == "pagebreak":
+                return self.runs(b.runs)
+            if b.kind in ("byline", "credit"):
+                return f'<p class="{b.kind}"{ida}>{self.runs(b.runs)}</p>'
             return f"<p{ida}>{self.runs(b.runs)}</p>"
         if isinstance(b, ListBlock):
             tag = "ol" if b.ordered else "ul"
@@ -177,6 +193,14 @@ class Writer:
             else:
                 body = f"<tbody>{''.join(rows)}</tbody>"
             return f"<table{ida}>{body}</table>"
+        if isinstance(b, Endnotes):
+            items = []
+            for fn in b.notes:
+                back = "" if fn.orphan else f' <a href="#ref-{attr(fn.id)}" role="doc-backlink">\u21a9</a>'
+                num = int(fn.marker) if fn.marker.isdigit() else 0
+                value = f' value="{num}"' if num else ""
+                items.append(f'<li{value} id="{attr(fn.id)}" epub:type="endnote"><p>{self.runs(fn.runs)}{back}</p></li>')
+            return f'<section epub:type="endnotes" class="endnotes"{ida}>\n<ol>\n' + "\n".join(items) + "\n</ol>\n</section>"
         if isinstance(b, Figure):
             src = self.image_files.get(b.image_id)
             if not src:
@@ -195,6 +219,7 @@ class Writer:
         )
 
     def chapter_xhtml(self, ch: Chapter) -> str:
+        self._cur_file = ch.filename
         referenced: set[str] = {s[2] for s in ch.sections if s[2]}
         referenced |= self._all_link_targets()
         body = [self.block(b, referenced) for b in ch.blocks]
@@ -259,14 +284,23 @@ class Writer:
         """Flat list of (depth, title, href) for chapters (depth 1) and their sections (depth 2..)."""
         flat: list[tuple[int, str, str]] = []
         for ch in self.doc.chapters:
-            flat.append((1, ch.title, ch.filename))
+            base = ch.nav_level - 1
+            flat.append((1 + base, ch.title, ch.filename))
             for lvl, title, anchor in ch.sections:
                 if not anchor:
                     continue
                 if ch.blocks and isinstance(ch.blocks[0], Heading) and plain_title(ch.blocks[0]) == title and ch.blocks[0].level == 1:
                     continue
-                flat.append((min(max(lvl, 2), 3), title, f"{ch.filename}#{anchor}"))
+                flat.append((min(max(lvl, 2), 3) + base, title, f"{ch.filename}#{anchor}"))
         return flat
+
+    def _page_list(self) -> str:
+        """From the markers the chapters actually carry (`chapter_xhtml` runs first)."""
+        marks = getattr(self, "_pages_written", [])
+        if not marks:
+            return ""
+        items = "".join(f'<li><a href="{attr(f)}#page-{p}">{esc(lab)}</a></li>\n' for p, lab, f in sorted(marks))
+        return f'<nav epub:type="page-list" hidden="hidden">\n<h2>Pages</h2>\n<ol>\n{items}</ol>\n</nav>\n'
 
     def nav_xhtml(self) -> str:
         label = _TOC_LABEL.get(self.lang.split("-")[0].lower(), "Contents")
@@ -297,7 +331,7 @@ class Writer:
         return (
             self._head(label).replace('href="style.css"', 'href="style.css"')
             + '<body>\n<nav epub:type="toc" id="toc">\n'
-            + f"<h1>{esc(label)}</h1>\n" + "\n".join(lines) + "\n</nav>\n"
+            + f"<h1>{esc(label)}</h1>\n" + "\n".join(lines) + "\n</nav>\n" + self._page_list()
             + '<nav epub:type="landmarks" hidden="hidden">\n<h2>Landmarks</h2>\n<ol>\n'
             + f'<li><a epub:type="bodymatter" href="{first}">{esc(self.doc.title)}</a></li>\n</ol>\n</nav>\n</body>\n</html>\n'
         )
@@ -340,8 +374,18 @@ class Writer:
             f"<dc:title>{esc(d.title)}</dc:title>",
             f"<dc:language>{esc(self.lang)}</dc:language>",
         ]
-        if d.author:
+        if d.creators:
+            for i, (name, role) in enumerate(d.creators, 1):
+                meta.append(f'<dc:creator id="creator{i}">{esc(name)}</dc:creator>')
+                meta.append(f'<meta refines="#creator{i}" property="role" scheme="marc:relators">{esc(role)}</meta>')
+        elif d.author:
             meta.append(f'<dc:creator id="creator">{esc(d.author)}</dc:creator>')
+        if d.isbn:
+            meta.append(f'<dc:identifier id="isbn">urn:isbn:{esc(d.isbn)}</dc:identifier>')
+        if d.publisher:
+            meta.append(f"<dc:publisher>{esc(d.publisher)}</dc:publisher>")
+        if d.date:
+            meta.append(f"<dc:date>{esc(d.date)}</dc:date>")
         meta.append(f'<meta property="dcterms:modified">{now}</meta>')
         meta.append('<meta property="rendition:layout">reflowable</meta>')
         if d.cover:
@@ -395,11 +439,12 @@ def write_epub(doc: Document, footnotes: dict[str, Footnote], path: Path, identi
         put("mimetype", "application/epub+zip", deflate=False)
         put("META-INF/container.xml", CONTAINER)
         put("OEBPS/content.opf", w.opf())
+        bodies = [(ch.filename, w.chapter_xhtml(ch)) for ch in doc.chapters]  # first: the page list needs their markers
         put("OEBPS/nav.xhtml", w.nav_xhtml())
         put("OEBPS/toc.ncx", w.ncx())
         put("OEBPS/style.css", CSS)
-        for ch in doc.chapters:
-            put(f"OEBPS/{ch.filename}", w.chapter_xhtml(ch))
+        for name, body in bodies:
+            put(f"OEBPS/{name}", body)
         for iid, asset in doc.images.items():
             put(f"OEBPS/{w.image_files[iid]}", asset.data, deflate=False)
         if doc.cover:

@@ -154,6 +154,7 @@ class Run:
     display: int = 0  # > 0: part of display formula number n (consecutive runs form one centred block)
     image: tuple | None = None  # (image_id, width_em): a formula picture; `text` is its alt text
     eqno: bool = False  # equation number of a display formula
+    pagebreak: int = 0  # > 0: an empty marker where PDF page n begins (printed page number in the page list)
 
 
 @dataclass
@@ -168,6 +169,7 @@ class Paragraph:
     size: float = 0.0
     id: str | None = None
     y1: float = 0.0  # bottom of the last line (layout bookkeeping)
+    last_page: int = 0  # page of the last part when joined across pages (layout bookkeeping)
 
 
 @dataclass
@@ -223,7 +225,17 @@ class Footnote:
     orphan: bool = False  # detected note block without a detectable reference in the text
 
 
-Block = Union[Paragraph, Heading, ListBlock, Table, Figure]
+@dataclass
+class Endnotes:
+    """A chapter's numbered endnotes (rendered as one <section epub:type="endnotes"> with an <ol>)."""
+    notes: list[Footnote]
+    page: int = 0
+    y0: float = 0.0
+    break_before: str | None = None
+    id: str | None = None
+
+
+Block = Union[Paragraph, Heading, ListBlock, Table, Figure, Endnotes]
 
 
 @dataclass
@@ -236,6 +248,7 @@ class Chapter:
     # nav children: (title, block id or None)
     sections: list[tuple[int, str, str | None]] = field(default_factory=list)  # (level, title, anchor)
     title_is_heading: bool = False
+    nav_level: int = 1  # 2: a chapter inside a part (nested under it in the navigation)
 
 
 @dataclass
@@ -247,3 +260,8 @@ class Document:
     images: dict[str, ImageAsset] = field(default_factory=dict)
     cover: ImageAsset | None = None
     warnings: list[str] = field(default_factory=list)
+    creators: list[tuple[str, str]] = field(default_factory=list)  # (name, MARC relator: "aut", "edt"); else `author`
+    publisher: str = ""
+    date: str = ""
+    isbn: str = ""
+    page_labels: dict[int, str] = field(default_factory=dict)  # PDF page -> printed page number (page-list nav)

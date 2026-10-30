@@ -442,3 +442,42 @@ def cover_from_pil(img) -> ImageAsset | None:
         return ImageAsset(buf.getvalue(), "image/jpeg", img.width, img.height)
     except Exception:  # noqa: BLE001
         return None
+
+
+def decode_pdf_string(b: bytes) -> str:
+    """A PDF text string (Info dictionary, outline titles): UTF-16 / UTF-8 with a byte-order mark, UTF-8 written
+    without one (common: "My \\xc3\\x81ntonia"; valid multi-byte UTF-8 is almost never meant as PDFDocEncoding), else
+    PDFDocEncoding."""
+    if b.startswith(b"\xfe\xff"):
+        return b[2:].decode("utf-16-be", "replace")
+    if b.startswith(b"\xff\xfe"):
+        return b[2:].decode("utf-16-le", "replace")
+    if b.startswith(b"\xef\xbb\xbf"):
+        return b[3:].decode("utf-8", "replace")
+    if any(c >= 0x80 for c in b):
+        try:
+            return b.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+    from pdfminer.utils import decode_text
+
+    return decode_text(b)
+
+
+def repair_mojibake(s: str) -> str:
+    """UTF-8 bytes shown as Latin-1 / Windows-1252 / PDFDocEncoding text ("My Ã\u2020ntonia" -> "My Ántonia")."""
+    if not s or not re.search("[ÂÃÄÅÆ][\u0080-\u00bf\u2010-\u203a\u0152-\u0192\u02c6\u02dc\u2122]", s):
+        return s
+    from pdfminer.utils import PDFDocEncoding
+
+    pdfdoc = {ch: i for i, ch in enumerate(PDFDocEncoding) if ch and i >= 0x80}
+    for enc in ("pdfdoc", "cp1252", "latin-1"):  # PDF metadata is PDFDocEncoding first
+        try:
+            raw = bytes(pdfdoc[c] if c in pdfdoc else ord(c) for c in s) if enc == "pdfdoc" else s.encode(enc)
+            fixed = raw.decode("utf-8")
+        except (UnicodeError, ValueError):
+            continue
+        if fixed != s:
+            return fixed
+    return s
+

@@ -86,6 +86,16 @@ tests/        pytest suite, run once per backend: `pytest src/pdftoepub/core/tes
    `tesseract --list-langs`. OCR font sizes are rescaled so the OCR body size equals the native body size. On OCR pages and
    OCR-layer pages, line sizes within 15 % of the page's body size are snapped to it (glyph-box sizes jitter by 10–15 %, which
    would otherwise split every paragraph).
+   Scanned pages with little text (< 150 characters) keep their page picture only if it shows more than specks outside
+   the text lines: blank pages, a picture of text the layer already holds and uniform layers (an all-black mask) go. A
+   mostly dark page (white on black part dividers) is judged inside its dark block, inverted, and read again by
+   tesseract when OCR is allowed (its text replaces the layer's when at least as long).
+   Words: when a page's layer has its own space glyphs (OCR layers such as ABBYY FineReader's, word processors), they are
+   the word boundaries; a space is added only where a gap is well above the line's letter spacing (both backends;
+   pdfminer's gap-based spaces would split letter-spaced small type into "B e r n a r d"). Conservative OCR
+   corrections (`ocrfix.py`, OCR'd books only): fixed patterns ("lbid", "Tbe", "xixᶜ siècle", spaced or misread digits in
+   years / page numbers) and words whose `î`/`ï`/`i` or `rn`/`m` variant, or camel-case split ("ofCalifornia"), occurs
+   ≥3 times in the book while the original occurs at most once.
 3. **Header/footer removal** (`layout.remove_running`). Lines/images in the top/bottom 15 % of the page whose normalised text
    (digits → `#`, spaces removed) recurs on a chain of ≥3 pages (gaps ≤2, so alternating verso/recto heads work) at about the same height
    and are not larger than 1.2× body size. Chapter-opening lines are kept (never on neighbouring pages / larger). Isolated page numbers in the
@@ -135,12 +145,39 @@ tests/        pytest suite, run once per backend: `pytest src/pdftoepub/core/tes
    printed→PDF page offset voted by ≥2 matches confirms openings and finds the ones the layout missed. Openings count only
    if there are ≥3 (or ≥2 confirmed by the TOC). Openings after a half-title (or ≥1.3× body when others are ≤1.15×) are
    chapters and the others level-2 sections when both kinds exist; roman numerals alone on a centred line mid-page are
-   numbered parts. Other OCR headings then never split chapters. Content before the first
+   numbered parts. Other OCR headings then never split chapters. OCR lines are never headings on pages with < 150
+   characters (title pages, bookplates, plates), before the first planned chapter, or when shaped like noise (< 60 %
+   letters, a word glued across a case change: "MeeISLAND").
+   **Printed table of contents** (`printedtoc.py`; no outline): a "Sommaire" / "Table des matières" / "Contents" page in
+   the first or last 15 pages, rows ending in page numbers (rows are re-assembled from the page-number column), parsed
+   into parts ("Deuxième partie" + title), numbered chapters ("5." + author line + title lines) and other entries
+   ("Introduction", "Épilogue"); section lists printed under a chapter in smaller type ("A | B | C") become its sections.
+   The printed → PDF offset is voted from the folios read in the running heads (before they are removed), else from the
+   titles found at the top of pages. Used only when it shows structure (≥3 numbered chapters or ≥2 parts; a flat list
+   such as Zola's TABLE leaves the scanned-book openings in charge): the contents pages are dropped, each entry's opening
+   page gets one `h1` (multi-line title merged, "N. " in front, the body's or the contents' wording, whichever has the
+   words more frequent in the book), author lines become `<p class="byline">`, front-matter headings become paragraphs,
+   and the entries split the book like an outline: parts and unnumbered entries level 1, chapters inside a part level 2
+   (nested in the navigation), sections below. Content before the first
    chapter becomes a front-matter chapter titled with the book title. Very long chapters (>400 k chars) are split. Inside a chapter the
    title is `h1` and the other heading ranks are re-mapped to h2–h4.
+   **Endnotes** (`endnotes.py`): a "Notes" heading (larger than the type below it) opens a region running to the next
+   heading ("Bibliographie", the next chapter); its lines, with those the page-footnote detector took from the page
+   bottoms, are put in reading order (page, column, height; OCR rows glued across the column gap are cut at the gutter)
+   and cut into notes where a line starts with the next number (a jump of up to 8 is accepted after a finished note:
+   lines the OCR layer lacks). The region becomes one `<section epub:type="endnotes">` with an `<ol>` (`value` = the
+   printed number); superscript numbers between the previous notes section and this one link to it (first occurrence),
+   and each linked note links back.
 10. **Links**. External `http(s)/mailto/ftp` kept (invalid URL characters percent-encoded); internal GoTo links are resolved to the nearest block on the target page
     (`file.xhtml#id`); ids are only emitted for referenced blocks.
-11. **EPUB** (`epub.py`). Metadata from options → PDF info → first h1 → file name. Language: option → stopword detection (en, fr,
+11. **EPUB** (`epub.py`). Metadata from options → PDF info → the first pages (`frontmatter.py`: largest type on the
+    cover / title page confirmed by a second page or a running head, or display type on pages 1–3; editors after
+    "Volume coordonné par" / "Sous la direction de" / "Edited by" as `dc:creator` role `edt`; publisher and year from
+    "© X, 2017"; ISBN with a valid check digit → `dc:identifier urn:isbn:…`, also from the file name) → first h1 → file
+    name without download-site prefixes and ISBN. A placeholder author ("anonymous") is ignored. PDF text strings are decoded as written (UTF-16 / UTF-8 with a
+    byte-order mark, UTF-8 without one, else PDFDocEncoding) and mojibake from a wrong decoding is repaired. Page list: when the
+    folios agree on one printed → PDF offset (or the contents fixed it), an empty `epub:type="pagebreak"` marker opens
+    each printed page (inside a paragraph that runs across the break) and the navigation gets a `page-list`. Language: option → stopword detection (en, fr,
     es, de, it, pt, nl). Cover = JPEG snapshot of page 1, declared with `properties="cover-image"` but **not** in the spine (no image-only
     chapter). CSS uses only `em`/`%`/unitless values; `body` has no `font-size`. The first-run result passes epubcheck 5.4.
 
@@ -153,8 +190,10 @@ not thread-safe; analysis and packaging run outside it.
 
 ## Known limits
 
-* No real table-of-contents page reconstruction (printed TOC pages stay as paragraphs with `…` leaders; on scans they are
-  only used to find chapters).
+* A printed table of contents is used only when it has numbered chapters or parts; otherwise (born-digital books with an
+  outline, flat lists) it stays as paragraphs. Its titles keep OCR misreads when the body's wording is not better.
+* Endnotes: notes the OCR layer lacks are missing; a superscript misread as a letter, or a reference set without a
+  superscript ("word23"), is not linked.
 * Mathematics: no MathML. Two-dimensional display formulas are pictures (alt text = linearised formula; glyphs whose
   ToUnicode maps are wrong, e.g. a CMEX radical read as "r", show up in the alt text); stacked inline fractions become
   `a/b`; matrices, multi-line aligned equations and inline formulas that are not fractions or scripts stay flat text.
