@@ -60,12 +60,12 @@ commande**, ou un **serveur** à héberger vous-même (Docker).
 
    | Système | Fichier | Taille | Minimum |
    |---|---|---|---|
-   | Mac avec puce Apple (M1 et suivantes) | `pdftoepub-macos-arm64.dmg` | ≈ 40 Mo | macOS 12 Monterey |
-   | Mac avec processeur Intel | `pdftoepub-macos-x86_64.dmg` | ≈ 42 Mo | macOS 12 Monterey |
-   | Mac, ligne de commande seule | `pdftoepub-macos-arm64` / `pdftoepub-macos-x86_64` | ≈ 37 / 38 Mo | macOS 12 |
-   | Windows | `pdftoepub-windows-x86_64.exe` | ≈ 88 Mo | Windows 64 bits (testé sous Wine uniquement) |
-   | Linux (PC) | `pdftoepub-linux-x86_64` | ≈ 73 Mo | glibc 2.31 (Debian 11, Ubuntu 20.04 ou plus récent) |
-   | Linux (ARM) | `pdftoepub-linux-arm64` | ≈ 72 Mo | idem |
+   | Mac avec puce Apple (M1 et suivantes) | `pdftoepub-macos-arm64.dmg` | ≈ 43 Mo | macOS 12 Monterey |
+   | Mac avec processeur Intel | `pdftoepub-macos-x86_64.dmg` | ≈ 45 Mo | macOS 12 Monterey |
+   | Mac, ligne de commande seule | `pdftoepub-macos-arm64` / `pdftoepub-macos-x86_64` | ≈ 40 / 42 Mo | macOS 12 |
+   | Windows | `pdftoepub-windows-x86_64.exe` | ≈ 91 Mo | Windows 64 bits (testé sous Wine uniquement) |
+   | Linux (PC) | `pdftoepub-linux-x86_64` | ≈ 76 Mo | glibc 2.31 (Debian 11, Ubuntu 20.04 ou plus récent) |
+   | Linux (ARM) | `pdftoepub-linux-arm64` | ≈ 75 Mo | idem |
 
    Chaque fichier inclut l'OCR ; rien d'autre à installer (ni Python, ni Tesseract). Les empreintes sont dans
    `SHA256SUMS`. Sur Mac, choisissez selon la puce ( menu → À propos de ce Mac).
@@ -285,12 +285,12 @@ yourself (Docker).
 
    | System | File | Size | Minimum |
    |---|---|---|---|
-   | Mac with Apple silicon (M1 and later) | `pdftoepub-macos-arm64.dmg` | ≈ 40 MB | macOS 12 Monterey |
-   | Mac with Intel processor | `pdftoepub-macos-x86_64.dmg` | ≈ 42 MB | macOS 12 Monterey |
-   | Mac, command line only | `pdftoepub-macos-arm64` / `pdftoepub-macos-x86_64` | ≈ 37 / 38 MB | macOS 12 |
-   | Windows | `pdftoepub-windows-x86_64.exe` | ≈ 88 MB | 64-bit Windows (tested under Wine only) |
-   | Linux (PC) | `pdftoepub-linux-x86_64` | ≈ 73 MB | glibc 2.31 (Debian 11, Ubuntu 20.04 or newer) |
-   | Linux (ARM) | `pdftoepub-linux-arm64` | ≈ 72 MB | same |
+   | Mac with Apple silicon (M1 and later) | `pdftoepub-macos-arm64.dmg` | ≈ 43 MB | macOS 12 Monterey |
+   | Mac with Intel processor | `pdftoepub-macos-x86_64.dmg` | ≈ 45 MB | macOS 12 Monterey |
+   | Mac, command line only | `pdftoepub-macos-arm64` / `pdftoepub-macos-x86_64` | ≈ 40 / 42 MB | macOS 12 |
+   | Windows | `pdftoepub-windows-x86_64.exe` | ≈ 91 MB | 64-bit Windows (tested under Wine only) |
+   | Linux (PC) | `pdftoepub-linux-x86_64` | ≈ 76 MB | glibc 2.31 (Debian 11, Ubuntu 20.04 or newer) |
+   | Linux (ARM) | `pdftoepub-linux-arm64` | ≈ 75 MB | same |
 
    Every file includes OCR; nothing else to install (no Python, no Tesseract). Checksums are in `SHA256SUMS`. On a Mac,
    pick by chip ( menu → About This Mac).

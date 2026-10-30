@@ -48,7 +48,7 @@ def main(out, tess):
                 except Exception:
                     pass
                 break
-    open(out, "w").write("".join(parts))
+    open(out, "w", encoding="utf-8").write("".join(parts))  # not the locale's code page (cp1252 on Windows)
 
 
 main(sys.argv[1], "--tesseract" in sys.argv)

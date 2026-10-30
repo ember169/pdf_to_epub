@@ -42,6 +42,31 @@ sys.exit(0 if all(f'epub:type="{t}"' in x for t in ("page-list", "endnotes", "no
 PYEOF2
   grep -q "wordfreq" "$W/out/${p}.licenses" 2>/dev/null && pass "bundled THIRD_PARTY_LICENSES lists wordfreq" || fail "wordfreq missing from the bundled licences"
 }
+# check_covers GLOB: every $W/out/GLOB.epub opens on its cover document (first spine itemref "cover") and its
+# cover-image is at least 1000 px tall
+check_covers() {
+  local out
+  out=$("$PY" -I - "$W/out" "$1" <<'PYEOF3'
+import io, pathlib, re, sys, zipfile
+from PIL import Image
+bad = []
+files = sorted(pathlib.Path(sys.argv[1]).glob(sys.argv[2] + ".epub"))
+for f in files:
+    z = zipfile.ZipFile(f)
+    opf = next(n for n in z.namelist() if n.endswith(".opf"))
+    x = z.read(opf).decode()
+    first = re.search(r"<itemref\b[^>]*>", x)
+    img = re.search(r'<item\b[^>]*properties="cover-image"[^>]*>', x)
+    href = img and re.search(r'href="([^"]+)"', img.group(0)).group(1)
+    h = Image.open(io.BytesIO(z.read(str(pathlib.PurePosixPath(opf).parent / href)))).height if href else 0
+    if not (first and 'idref="cover"' in first.group(0)) or h < 1000:
+        bad.append("%s(spine0=%s,h=%d)" % (f.name, first.group(0) if first else "none", h))
+print(len(files), " ".join(bad))
+sys.exit(1 if bad or not files else 0)
+PYEOF3
+)
+  [ $? = 0 ] && pass "cover first in spine, image >= 1000 px ($(echo "$out" | cut -d' ' -f1) EPUBs)" || fail "cover: $out"
+}
 # result_of PREFIX OUTPUT-LINES: report RESULT lines emitted by smoke_web.sh
 report_results() {  # $1 = label prefix ; stdin = smoke_web output
   while read -r l; do
@@ -250,5 +275,6 @@ case "${ONLY:-all}" in
   macos-arm64) test_macos arm64;; macos-x86_64) test_macos x86_64;;
   *) test_windows; test_macos arm64; test_macos x86_64; test_linux arm64; test_linux x86_64; epubcheck_all;;
 esac
+echo "== cover of every EPUB produced above"; check_covers "*"
 (cd "$DIST" && : > SHA256SUMS && for f in pdftoepub-*; do case $f in *.zip|*-dir) ;; *) shasum -a 256 "$f" >> SHA256SUMS;; esac; done; echo; cat SHA256SUMS)
 [ $FAIL = 0 ] && echo "ALL SMOKE TESTS PASSED" || { echo "SOME SMOKE TESTS FAILED"; exit 1; }
