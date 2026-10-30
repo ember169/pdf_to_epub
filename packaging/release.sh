@@ -8,7 +8,7 @@
 # (all targets) and test with packaging/smoke.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-REPO=${PDFTOEPUB_REPO:-ember169/pdftoepub}   # GitHub slug: the one place to change it (also used in README links)
+REPO=${PDFTOEPUB_REPO:-ember169/pdf_to_epub}   # GitHub slug: the one place to change it (also used in README links)
 TAG=${1:-}; shift || true
 NOTES=""; PUBLISH=""
 while [ $# -gt 0 ]; do

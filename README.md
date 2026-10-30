@@ -40,8 +40,8 @@ reflows with the reader's font size on an e-reader or a phone. Scanned pages are
 
 ## Download / Télécharger
 
-From the [latest release](https://github.com/ember169/pdftoepub/releases/latest)
-(repository slug `ember169/pdftoepub`, to be confirmed; it is set in `packaging/release.sh`). Every file includes OCR
+From the [latest release](https://github.com/ember169/pdf_to_epub/releases/latest)
+(set in `packaging/release.sh`). Every file includes OCR
 (Tesseract with English and French data) and checks against `SHA256SUMS`.
 
 | System | File | Size | Minimum |
@@ -163,7 +163,7 @@ Measured on 18 public-domain or openly licensed PDFs (3,362 pages: novels in Eng
 
 ## Website (planned)
 
-A GitHub Pages site is planned at <https://ember169.github.io/pdftoepub/>: presentation, the download table,
+A GitHub Pages site is planned at <https://ember169.github.io/pdf_to_epub/>: presentation, the download table,
 screenshots and a FAQ on opening unsigned apps. Its sources will live in `docs/` (which already holds the screenshots;
 the site's `index.html` is not created yet) and be published with the Pages "Deploy from a branch" setting (branch
 `main`, folder `/docs`, the only sub-folder that setting can serve), with no GitHub Actions.
