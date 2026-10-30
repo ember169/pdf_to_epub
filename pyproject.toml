@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pdftoepub"
-version = "0.1.0"
+version = "0.2.0"
 description = "Convert PDFs to reflowable EPUB 3 (real text, not page images), self-hostable with a web front"
 requires-python = ">=3.12"
 license = { text = "MIT" }

@@ -30,6 +30,8 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY packaging/entry.py packaging/pdftoepub.spec packaging/gen_licenses.py packaging/
 RUN /venv/bin/pip install -q --no-deps --no-build-isolation .
+# wordfreq lexicons for the spec (normally already fetched into src/ by build.sh; sha256-checked either way)
+RUN python src/pdftoepub/core/lexicon.py fetch
 RUN /venv/bin/python packaging/gen_licenses.py /THIRD_PARTY_LICENSES --tesseract
 RUN cd packaging && TESS_DIR=/tess LICENSES_FILE=/THIRD_PARTY_LICENSES /venv/bin/pyinstaller --noconfirm --clean \
       --distpath /out --workpath /tmp/w pdftoepub.spec

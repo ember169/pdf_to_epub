@@ -59,6 +59,93 @@ Caveats: on the math books (Calculus, Galois, Descartes) numbers inside formulas
 display formulas count as "breaks". The French OCR excerpt is compared against another OCR engine (IA's), which is not
 ground truth.
 
+## Round 7: a real cover
+
+Before is 6a5d316 (`r7-before`) and after is this tree (`r7-after`). Each was run on all 19 documents with both backends.
+epubcheck: 0 errors everywhere. The test suite: 449 passed, 2 skipped.
+
+**What changed in the EPUB:**
+* **A cover document first.** `cover.xhtml` is the first spine item (`linear="yes"`, `<section epub:type="cover">`): an
+  SVG wrapper (`viewBox` = the picture, `preserveAspectRatio="xMidYMid meet"`, so it fills the screen without cropping)
+  with the book title as `<title>` and `aria-label`. Reading systems that ignore the cover metadata (sideloaded Kobo, some
+  Android readers, Kindle conversions) still open on the cover.
+* **Cover metadata kept:** `properties="cover-image"` and the legacy `<meta name="cover">` stay.
+* **Landmarks:** the landmarks nav now lists cover, table of contents and body start. An EPUB 2 `<guide>` lists the same
+  (cover, toc, text) for older tools.
+* **The nav document** is in the spine as `linear="no"`, because epubcheck requires a landmark's target to be in the
+  spine.
+
+**Which page** (`core/cover.py`, the first 3 pages rendered at 40 dpi):
+* page 1, unless it is blank (under 0.4 % inked pixels: white with specks); then the first page of the first 3 that is not;
+* a weak page 1 (under 3 % ink and no display type: a bookplate, a stamp) gives way to page 2 or 3 only when that page
+  clearly is a cover (≥ 25 % ink, a full-bleed picture, or type ≥ 2× the body size);
+* otherwise page 1.
+
+On the corpus every document keeps page 1, including the scans, whose page 1 is the photographed binding or title page.
+The rule is covered by unit tests.
+
+**Which picture:**
+* **Embedded:** used when the page's one full-page raster image has no visible text drawn over it. It is kept as embedded
+  when it is a JPEG of at most 1 MB and 800–1600 px high, otherwise re-encoded.
+* **Rendering:** used otherwise, 1600 px high (Bibebook covers set the title as text over a framed background: the
+  rendering keeps the title).
+* **Encoding:** JPEG quality 85, lowered in steps until it fits in 1 MB. Greyscale stays greyscale (a page whose three
+  channels match is saved as L). The render pixel cap still applies.
+
+**The cover page's own text.** When every word on the chosen cover page is in the title, the creators, the publisher or
+the year (now in the metadata), that page's blocks are not repeated at the start of the first document. Any other text
+stays, for example an abstract on page 1 of a paper, a Gutenberg licence header or a title page with names.
+
+Every text change in the corpus is listed in the table below. The private book loses 6 words: its cover title, which
+also opened chapter 1. On all 18 public documents the text is word-for-word identical. Two of them had no cover before
+(Zola and Innkeeper, whose page 1 is a photographed binding that round 5 dropped from the text as a picture of no text);
+they have one now.
+
+**Covers on the corpus** (pdfminer; PyMuPDF within a few KB):
+
+| document | cover before (pdfminer) | cover after (pdfminer) | words removed from the body |
+|---|---|---|---|
+| fr-novel-roi-montagnes | 641x910 RGB 60KB | 1127x1600 RGB 149KB | 0 |
+| fr-novel-glebe | 641x910 RGB 57KB | 1127x1600 RGB 140KB | 0 |
+| fr-novel-chignole | 641x910 RGB 59KB | 1127x1600 L 142KB | 0 |
+| en-novel-my-antonia | 641x910 RGB 37KB | 1127x1600 L 83KB | 0 |
+| en-novel-puck | 641x910 RGB 38KB | 1127x1600 L 85KB | 0 |
+| arxiv-llama | 910x1287 RGB 253KB | 1131x1600 L 349KB | 0 |
+| arxiv-ligo | 935x1210 RGB 266KB | 1237x1600 L 433KB | 0 |
+| arxiv-mistral | 935x1210 RGB 165KB | 1237x1600 RGB 272KB | 0 |
+| arxiv-foundation-models | 743x1100 RGB 198KB | 1080x1600 L 360KB | 0 |
+| arxiv-d2l | 910x1287 RGB 17KB | 1131x1600 L 21KB | 0 |
+| pg-calculus-made-easy | 599x880 RGB 51KB | 1089x1600 L 122KB | 0 |
+| pg-descartes-geometrie | 935x1210 RGB 60KB | 1237x1600 L 33KB | 0 |
+| pg-galois | 605x880 RGB 42KB | 1100x1600 L 89KB | 0 |
+| ia-zola-roman-experimental | none | 1007x1600 RGB 265KB | 0 |
+| ia-island-plant | 505x823 RGB 42KB | 982x1600 RGB 147KB | 0 |
+| ia-innkeeper-source | none | 979x1600 RGB 341KB | 0 |
+| scan-only-en | 500x823 RGB 72KB | 909x1496 RGB 192KB | 0 |
+| scan-only-fr | 437x718 RGB 45KB | 794x1305 RGB 111KB | 0 |
+| private book | 524x823 RGB 10KB | 1019x1600 L 25KB | 6 |
+
+**Visual check:** a contact sheet (scratchpad) of the book, Zola, Island, Innkeeper, LLaMA, Puck and the three Bibebook
+novels, before and after:
+* **Same pictures, sharper:** the book, Island, LLaMA and Puck show the same page as before at about twice the
+  resolution; the book's black cover is now a 25 KB greyscale JPEG.
+* **New covers:** Zola and Innkeeper show their scanned bindings, Innkeeper with its title label.
+* **Bibebook novels:** a first version used the embedded background alone and lost the title. That was fixed by
+  rendering pages with visible text, and the titles are back.
+
+**Switching it off.** It only takes a `ConvertOptions.cover: bool = True` field (API contract) and a CLI / web switch
+(`--no-cover`). `pipeline` already reads `getattr(options, "cover", True)`, so it works as soon as the field exists. I
+did not change `api.py`. `image_mode="none"` already leaves the cover out.
+
+**Tests** (`core/tests/test_cover.py`):
+* the page choice: blank, bookplate before a cover, display type, unsure → page 1, all blank;
+* an embedded picture kept as is, and grey staying grey;
+* the cover text dropped only when it is title and names;
+* the EPUB markup: spine, `cover.xhtml`, landmarks, guide, a 1600 px picture, no repeated cover text;
+* no cover with `image_mode="none"`.
+
+The evaluator leaves the cover document and the non-linear nav document out of the book text and the chapter counts.
+
 ## Round 6: glued lower-case words in OCR'd books
 
 Before is d563fe1 (`r6-before`) and after is this tree (`r6-after`). Each was run on all 19 documents with both backends

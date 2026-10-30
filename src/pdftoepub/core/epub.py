@@ -333,6 +333,8 @@ class Writer:
             + '<body>\n<nav epub:type="toc" id="toc">\n'
             + f"<h1>{esc(label)}</h1>\n" + "\n".join(lines) + "\n</nav>\n" + self._page_list()
             + '<nav epub:type="landmarks" hidden="hidden">\n<h2>Landmarks</h2>\n<ol>\n'
+            + ('<li><a epub:type="cover" href="cover.xhtml">Cover</a></li>\n' if self.doc.cover else "")
+            + f'<li><a epub:type="toc" href="nav.xhtml#toc">{esc(label)}</a></li>\n'
             + f'<li><a epub:type="bodymatter" href="{first}">{esc(self.doc.title)}</a></li>\n</ol>\n</nav>\n</body>\n</html>\n'
         )
 
@@ -396,9 +398,13 @@ class Writer:
             '<item id="css" href="style.css" media-type="text/css"/>',
         ]
         spine = []
+        if d.cover:  # a cover document first: readers that ignore cover-image metadata still open on the cover
+            man.append('<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml" properties="svg"/>')
+            spine.append('<itemref idref="cover" linear="yes"/>')
         for i, ch in enumerate(d.chapters, 1):
             man.append(f'<item id="c{i:03d}" href="{ch.filename}" media-type="application/xhtml+xml"/>')
             spine.append(f'<itemref idref="c{i:03d}"/>')
+        spine.append('<itemref idref="nav" linear="no"/>')  # the contents page, reachable from the landmarks
         for iid, asset in d.images.items():
             man.append(f'<item id="{iid}" href="{self.image_files[iid]}" media-type="{asset.media_type}"/>')
         if d.cover:
@@ -409,7 +415,35 @@ class Writer:
             f'<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="{attr(self.lang)}">\n'
             '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n' + "\n".join(meta) + "\n</metadata>\n"
             "<manifest>\n" + "\n".join(man) + "\n</manifest>\n"
-            '<spine toc="ncx">\n' + "\n".join(spine) + "\n</spine>\n</package>\n"
+            '<spine toc="ncx">\n' + "\n".join(spine) + "\n</spine>\n" + self._guide() + "</package>\n"
+        )
+
+    def _guide(self) -> str:
+        """EPUB 2 guide, for reading systems and converters that still look for the cover there."""
+        refs = []
+        if self.doc.cover:
+            refs.append('<reference type="cover" title="Cover" href="cover.xhtml"/>')
+        refs.append('<reference type="toc" title="Contents" href="nav.xhtml"/>')
+        if self.doc.chapters:
+            refs.append(f'<reference type="text" title="Start" href="{attr(self.doc.chapters[0].filename)}"/>')
+        return "<guide>\n" + "\n".join(refs) + "\n</guide>\n"
+
+    def cover_xhtml(self) -> str:
+        c = self.doc.cover
+        name = f"images/cover.{_ext(c.media_type)}"
+        title = esc(self.doc.title)
+        return (
+            '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
+            f'<html xmlns="{XHTML_NS}" xmlns:epub="{EPUB_NS}" lang="{attr(self.lang)}" xml:lang="{attr(self.lang)}">\n'
+            f'<head>\n<meta charset="utf-8"/>\n<title>{title}</title>\n'
+            '<style>html, body { margin: 0; padding: 0; height: 100%; } '
+            'svg { display: block; width: 100%; height: 100%; }</style>\n</head>\n'
+            '<body>\n<section epub:type="cover" class="cover">\n'
+            f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" '
+            f'width="100%" height="100%" viewBox="0 0 {c.width} {c.height}" preserveAspectRatio="xMidYMid meet" '
+            f'role="img" aria-label="{attr(self.doc.title)}">\n<title>{title}</title>\n'
+            f'<image width="{c.width}" height="{c.height}" xlink:href="{name}"/>\n</svg>\n'
+            "</section>\n</body>\n</html>\n"
         )
 
 
@@ -449,4 +483,5 @@ def write_epub(doc: Document, footnotes: dict[str, Footnote], path: Path, identi
             put(f"OEBPS/{w.image_files[iid]}", asset.data, deflate=False)
         if doc.cover:
             put(f"OEBPS/images/cover.{_ext(doc.cover.media_type)}", doc.cover.data, deflate=False)
+            put("OEBPS/cover.xhtml", w.cover_xhtml())
     tmp.replace(path)

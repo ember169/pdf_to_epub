@@ -9,6 +9,10 @@ RUN /opt/venv/bin/pip install --require-hashes --no-deps -r build-backend.lock -
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN /opt/venv/bin/pip install --no-deps --no-build-isolation .
+# wordfreq lexicons (glued-word splitter): git-ignored, so not in the wheel. Fetched into src/ (pinned, sha256-checked;
+# a valid copy from the build context is kept) and copied into the installed package.
+RUN python src/pdftoepub/core/lexicon.py fetch \
+ && cp -R src/pdftoepub/core/data "$(/opt/venv/bin/python -c 'import os, pdftoepub.core as c; print(os.path.dirname(c.__file__))')/"
 
 FROM python:3.12-slim AS runtime
 ENV PATH=/opt/venv/bin:$PATH \
@@ -44,7 +48,10 @@ RUN pip install --require-hashes --no-deps -r /tmp/build-backend.lock -r /tmp/re
 COPY pyproject.toml README.md /src/
 COPY src /src/src
 COPY tests /src/tests
-RUN pip install --no-deps --no-build-isolation /src && chown -R app /src
+RUN pip install --no-deps --no-build-isolation /src \
+ && python /src/src/pdftoepub/core/lexicon.py fetch \
+ && cp -R /src/src/pdftoepub/core/data "$(python -c 'import os, pdftoepub.core as c; print(os.path.dirname(c.__file__))')/" \
+ && chown -R app /src
 USER app
 WORKDIR /src
 CMD ["pytest", "-v"]

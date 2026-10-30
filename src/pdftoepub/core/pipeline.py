@@ -12,9 +12,10 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 
 from ..api import ConversionError, ConvertOptions, ConvertResult, ProgressCb, ProgressEvent
+from . import cover as coverlib
 from . import endnotes, formulas, frontmatter, glue, layout, ocr, ocrfix, openings, printedtoc, structure
 from .backends import get_backend
-from .backends.common import ImageStore, cover_from_pil, limit_pillow, page_text_quality
+from .backends.common import ImageStore, limit_pillow, page_text_quality
 from .epub import write_epub
 from .ir import Chapter, Document, Figure, Heading, ImageAsset, ListBlock, PageData, Paragraph, Table
 
@@ -152,6 +153,7 @@ def _extract_all(doc, options: ConvertOptions, progress, warnings: list[str], st
         nchars, garbage = page_text_quality(pd.lines, pd.bad_chars)
         scan = any(im.kind == "scan" for im in pd.images)
         pd.scanned = scan
+        pd.scan_ids = [im.image_id for im in pd.images if im.kind == "scan"]
         needs_ocr = False
         textless = garbage or (nchars < 20 and (scan or (pd.has_graphics and not pd.images)))
         if options.ocr == "force":
@@ -269,15 +271,21 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
         except Exception:  # noqa: BLE001
             warnings.append("The PDF outline could not be read; chapters were detected from headings.")
         pages, ocr_pages = _extract_all(doc, options, progress, warnings, store, lock)
-        cover = None
-        if options.image_mode != "none":
-            p0 = pages[0]
-            if p0.lines or p0.images or p0.tables:
-                try:
+        cover, cover_page = None, None
+        if options.image_mode != "none" and getattr(options, "cover", True):  # ConvertOptions.cover, once the API has it
+            try:  # the cover: page 1 unless it is blank or a bookplate before a real cover (core/cover.py)
+                thumbs = {}
+                for p in pages[:3]:
                     with lock:
-                        cover = cover_from_pil(doc.render_page(1, 110))
-                except Exception:  # noqa: BLE001
-                    cover = None
+                        thumbs[p.number] = doc.render_page(p.number, 40, gray=True)
+                cover_page = coverlib.choose(pages, thumbs, layout.body_size(pages))
+                if cover_page:
+                    def render(dpi, n=cover_page):
+                        with lock:
+                            return doc.render_page(n, dpi)
+                    cover = coverlib.picture(pages[cover_page - 1], store, render)
+            except Exception:  # noqa: BLE001
+                cover, cover_page = None, None
         warnings.extend(w for w in getattr(doc, "warnings", []) if w not in warnings)
     finally:
         with lock:
@@ -356,9 +364,14 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
     title = (structure.clean_text_field(options.title) or structure.clean_meta_title(meta.get("title"))
              or structure.clean_text_field(printed.title) or _guess_title(blocks, pdf_path))
     author = structure.clean_text_field(options.author) or structure.clean_text_field(meta.get("author"))
+    if structure.leaked_markup(author) and not options.author:
+        author = ""  # TeX / PostScript code, not a name
     if re.fullmatch(r"(?i)(anonymous|unknown|unspecified|author|user|admin(istrator)?|n/?a)", author or ""):
         author = ""  # a tool's placeholder (reportlab writes "anonymous"), not a name
     creators = [] if author else [(n, "edt") for n in (structure.clean_text_field(e) for e in printed.editors) if n]
+    if cover and cover_page:  # the cover's own text (title, names, publisher) is the cover picture and the metadata
+        blocks, _ = coverlib.drop_cover_text(blocks, cover_page, [title, author, printed.title, printed.publisher,
+                                                                  printed.year, meta.get("title"), *printed.editors])
     sample = " ".join(structure.plain(b.runs) for b in blocks if isinstance(b, Paragraph))[:30000]
     lang = options.language if options.language and _LANG_OK.match(options.language) else structure.detect_language(sample)
     if ocr_book:  # words the OCR ran together ("danslavie"), with the language's frequency lexicon

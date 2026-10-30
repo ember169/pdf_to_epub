@@ -12,6 +12,8 @@ $v = "packaging\.buildvenv\Scripts"
 & "$v\python" -m pip install -q . pyinstaller
 & "$v\python" -I -c "import importlib.util as u,sys; sys.exit(1 if u.find_spec('pymupdf') else 0)"
 if ($LASTEXITCODE -ne 0) { throw "pymupdf present in build venv (AGPL); refusing" }
+& "$v\python" src\pdftoepub\core\lexicon.py fetch   # wordfreq lexicons, bundled by the spec
+if ($LASTEXITCODE -ne 0) { throw "cannot fetch the wordfreq lexicons" }
 if ($TessDir) { $env:TESS_DIR = (Resolve-Path $TessDir).Path }
 Push-Location packaging
 & "..\$v\pyinstaller" --noconfirm --clean --distpath ..\build\out --workpath ..\build\work pdftoepub.spec

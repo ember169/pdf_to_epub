@@ -20,6 +20,9 @@ Python Software Foundation License - https://docs.python.org/3/license.html
 GPL-2.0-or-later with the bootloader exception that permits use in non-GPL applications - https://pyinstaller.org/en/stable/license.html
 == PDFium (via pypdfium2) ==
 Apache-2.0 / BSD-3-Clause - https://pdfium.googlesource.com/pdfium/+/main/LICENSE
+== wordfreq 3.2 word-frequency data (large_fr, large_en; pdftoepub/core/data/wordfreq, unmodified) ==
+Data: CC BY-SA 4.0 - https://creativecommons.org/licenses/by-sa/4.0/ ; code: Apache-2.0 - https://github.com/rspeer/wordfreq/blob/v3.2/LICENSE.txt
+By Robyn Speer, https://github.com/rspeer/wordfreq (commit 42233e6). Contains data from Google Books Ngrams (http://books.google.com/ngrams), OPUS OpenSubtitles 2018 (attribution to OpenSubtitles, http://www.opensubtitles.org/), SUBTLEX by Marc Brysbaert et al. (freely available data), Wikipedia, the Leeds Internet Corpus and ParaCrawl. Full notice: pdftoepub/core/data/wordfreq/NOTICE.txt
 """
 
 

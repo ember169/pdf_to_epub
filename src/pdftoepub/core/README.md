@@ -186,8 +186,12 @@ tests/        pytest suite, run once per backend: `pytest src/pdftoepub/core/tes
     byte-order mark, UTF-8 without one, else PDFDocEncoding) and mojibake from a wrong decoding is repaired. Page list: when the
     folios agree on one printed → PDF offset (or the contents fixed it), an empty `epub:type="pagebreak"` marker opens
     each printed page (inside a paragraph that runs across the break) and the navigation gets a `page-list`. Language: option → stopword detection (en, fr,
-    es, de, it, pt, nl). Cover = JPEG snapshot of page 1, declared with `properties="cover-image"` but **not** in the spine (no image-only
-    chapter). CSS uses only `em`/`%`/unitless values; `body` has no `font-size`. The first-run result passes epubcheck 5.4.
+    es, de, it, pt, nl). Cover (`cover.py`): page 1, unless blank (then the first non-blank page of the first 3) or a
+    bookplate before a clear cover (full-bleed picture or display type on page 2–3); the page's one full-page raster image as
+    embedded, else a render 1600 px high (JPEG q85 ≤ 1 MB, grey stays grey). `cover.xhtml` (SVG wrapper, `epub:type="cover"`)
+    is the first spine item, with `cover-image` + `<meta name="cover">`, landmarks (cover, toc, bodymatter) and an EPUB 2
+    `<guide>`; the nav document is in the spine as `linear="no"`. A cover page whose words are all title / names / publisher
+    / year is not repeated in the body. CSS uses only `em`/`%`/unitless values; `body` has no `font-size`. The first-run result passes epubcheck 5.4.
 
 ## Errors and warnings
 

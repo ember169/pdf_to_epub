@@ -992,9 +992,18 @@ def safe_url(href: str | None) -> str | None:
         return None
 
 
+# TeX / PostScript leaking into an Info field (hyperref fed a macro): braces, \commands, internal @-macros, font specs
+_MARKUP_LEAK_RE = re.compile(r"[{}]|\\[A-Za-z@]|[A-Za-z]@[A-Za-z]+\b(?!\.)|/[a-z]+/[a-z]+/[a-z]+/|\b(?:[exg]?def|relax)\b")
+
+
+def leaked_markup(t: str | None) -> bool:
+    """An Info title / author holding TeX or PostScript code rather than words."""
+    return bool(t and _MARKUP_LEAK_RE.search(t))
+
+
 def clean_meta_title(t: str | None) -> str | None:
     t = clean_text_field(t)
-    if not t:
+    if not t or leaked_markup(t):
         return None
     if len(t) < 2 or re.search(r"\.(pdf|docx?|tex|indd|qxd|odt|rtf|txt)$", t, re.I):
         return None

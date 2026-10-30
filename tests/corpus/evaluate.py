@@ -209,6 +209,11 @@ def read_epub(path: Path) -> dict:
     ns = {"o": "http://www.idpf.org/2007/opf"}
     manifest = {i.get("id"): i for i in opf.iterfind(".//o:manifest/o:item", ns)}
     spine = [manifest[r.get("idref")].get("href") for r in opf.iterfind(".//o:spine/o:itemref", ns)]
+    has_cover_doc = bool(spine) and b'epub:type="cover"' in z.read(base + spine[0])
+    if has_cover_doc:  # the cover document (a picture): not a chapter
+        spine = spine[1:]
+    nav_href = next((i.get("href") for i in manifest.values() if "nav" in (i.get("properties") or "").split()), None)
+    spine = [h for h in spine if h != nav_href]  # the contents page (in the spine as linear="no"): not book text
     blocks: list[tuple[str, str, int]] = []  # (tag, text, chapter index)
     headings = collections.Counter()
     n_img = n_formula = n_subsup = 0
@@ -292,7 +297,7 @@ def read_epub(path: Path) -> dict:
         prev = tag if t else prev
     return {"blocks": blocks, "headings": dict(headings), "images": n_img, "nav": nav_titles, "chapters": chapters,
             "first_heads": first_heads, "formula_imgs": n_formula, "sub_sup": n_subsup, "extra": dict(extra),
-            "dc_title": dc_title}
+            "dc_title": dc_title, "cover_doc": has_cover_doc}
 
 
 # ---------------------------------------------------------------- metrics

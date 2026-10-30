@@ -3,6 +3,7 @@
 #   macOS: CLI (arm64 natively, x86_64 under Rosetta) under `env -i`, and each .app from its .dmg via `open`           Linux binaries: clean debian:11-slim and ubuntu:20.04 containers (no Python/tesseract)
 #   Windows .exe: under Wine in Docker (needs the pte-winbase image: packaging/build.sh windows builds it)
 # Per binary: multiprocessing spawn; CLI text conversion; CLI OCR of the scanned fixture with no system tesseract;
+# bundled wordfreq lexicon (an OCR'd French scan's "dontil" -> "dont il"), page list + linked endnotes, bundled licences;
 # no-argument launch starts the server (browser opening disabled via BROWSER=true); and with `serve`:
 #   upload+poll+download, OCR through a web job, MAX_PAGES=1 -> too_many_pages, JOB_TIMEOUT_S=0.2 -> timeout
 #   (jobs run in a spawned child process, so these prove freeze_support()/spawn work inside the frozen binary).
@@ -12,6 +13,11 @@ cd "$(dirname "$0")/.."
 ROOT=$PWD; DIST=$ROOT/dist; W=$ROOT/build/smoke; rm -rf "$W"; mkdir -p "$W/fx" "$W/out"
 PY=$ROOT/.venv/bin/python; [ -x "$PY" ] || PY=python3
 "$PY" tests/fixtures/make_fixtures.py "$W/fx" >/dev/null || { echo "cannot generate fixtures (need reportlab, pypdfium2)"; exit 1; }
+# glued_fr.pdf: 4 image-only pages of a French scan whose OCR runs "dont il" together; only the bundled wordfreq lexicon
+# splits it. book.pdf: the core tests' sample book (printed contents, linked endnotes, folios -> page list).
+cp tests/.corpus/scan-only-fr.pdf "$W/fx/glued_fr.pdf" 2>/dev/null || { echo "need tests/.corpus/scan-only-fr.pdf: python tests/corpus/fetch.py"; exit 1; }
+"$PY" -c "import sys; from pathlib import Path; from pdftoepub.core.tests.test_book_structure import _book; _book(Path(sys.argv[1]))" "$W/fx/book.pdf" \
+  || { echo "cannot generate book.pdf"; exit 1; }
 FAIL=0; pass() { echo "  PASS $*"; }; fail() { echo "  FAIL $*"; FAIL=1; }
 BR="BROWSER=true"   # webbrowser.open() runs `true`: nothing opens
 
@@ -22,6 +28,19 @@ assert z.namelist()[0] == "mimetype"
 t = " ".join(re.sub("<[^>]+>", " ", z.read(n).decode()) for n in z.namelist() if n.endswith(".xhtml"))
 sys.exit(0 if sys.argv[2] in re.sub(r"\s+", " ", t) else 1)
 PYEOF
+}
+# check_extras PREFIX: from $W/out/PREFIX_glued.epub, PREFIX_book.epub and PREFIX.licenses (`--_licenses` output):
+# the lexicon is found inside the frozen binary, page list + linked endnotes, wordfreq in the bundled licences
+check_extras() {
+  local p=$1
+  check_epub "$W/out/${p}_glued.epub" "dont il" && ! check_epub "$W/out/${p}_glued.epub" "dontil" \
+    && pass "bundled lexicon: OCR 'dontil' -> 'dont il'" || fail "bundled lexicon: glued word not split"
+  "$PY" -I - "$W/out/${p}_book.epub" <<'PYEOF2' && pass "page-list nav + linked endnotes" || fail "page-list nav / endnotes"
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1]); x = " ".join(z.read(n).decode() for n in z.namelist() if n.endswith(".xhtml"))
+sys.exit(0 if all(f'epub:type="{t}"' in x for t in ("page-list", "endnotes", "noteref")) else 1)
+PYEOF2
+  grep -q "wordfreq" "$W/out/${p}.licenses" 2>/dev/null && pass "bundled THIRD_PARTY_LICENSES lists wordfreq" || fail "wordfreq missing from the bundled licences"
 }
 # result_of PREFIX OUTPUT-LINES: report RESULT lines emitted by smoke_web.sh
 report_results() {  # $1 = label prefix ; stdin = smoke_web output
@@ -57,6 +76,10 @@ test_macos() {  # $1 = arm64 | x86_64 (x86_64 runs under Rosetta on Apple silico
   if [ $ocr = 1 ]; then
     grep -q "1 OCR" "$W/out/${P}_scan.log" && check_epub "$W/out/${P}_scan.epub" "Optical character recognition" && pass "CLI OCR (bundled tesseract)" || fail "CLI OCR"
   else skip "CLI OCR: this build has no bundled tesseract (see packaging/build_tesseract_macos.sh)"; fi
+  run "$T/p" "$W/fx/glued_fr.pdf" -o "$W/out/${P}_glued.epub" -q >/dev/null 2>&1
+  run "$T/p" "$W/fx/book.pdf" -o "$W/out/${P}_book.epub" -q >/dev/null 2>&1
+  run "$T/p" --_licenses > "$W/out/${P}.licenses" 2>&1
+  check_extras "$P"
   run "$T/p" > "$T/noarg.log" 2>&1 & local pid=$! url="" port
   for _ in $(seq 1 60); do url=$(grep -o 'http://127.0.0.1:[0-9]*' "$T/noarg.log" | head -1); [ -n "$url" ] && break; sleep 1; done
   port=${url##*:}; [ -n "$port" ] && for _ in $(seq 1 60); do curl -sf "localhost:$port/healthz" >/dev/null && break; sleep 1; done
@@ -83,6 +106,11 @@ test_macos_app() {  # $1 arch, $2 ocr(0/1): mount the .dmg, launch the .app with
   cp -R "$mnt/pdftoepub.app" "$T/"; hdiutil detach -quiet "$mnt"
   codesign --verify --deep --strict "$T/pdftoepub.app" 2>/dev/null && pass "app signature valid ($(codesign -dv "$T/pdftoepub.app" 2>&1 | sed -n 's/^Authority=//p;s/^Signature=//p' | head -1))" || fail "app signature"
   [ "$(lipo -archs "$T/pdftoepub.app/Contents/MacOS/pdftoepub")" = "$a" ] && pass "app architecture $a" || fail "app architecture"
+  local X="$T/pdftoepub.app/Contents/MacOS/pdftoepub" Q=app_$a
+  env -i HOME="$T" PATH=/usr/bin:/bin arch "-$a" "$X" "$W/fx/glued_fr.pdf" -o "$W/out/${Q}_glued.epub" -q >/dev/null 2>&1
+  env -i HOME="$T" PATH=/usr/bin:/bin arch "-$a" "$X" "$W/fx/book.pdf" -o "$W/out/${Q}_book.epub" -q >/dev/null 2>&1
+  env -i HOME="$T" PATH=/usr/bin:/bin arch "-$a" "$X" --_licenses > "$W/out/${Q}.licenses" 2>&1
+  check_extras "$Q"
   pkill -f "pdftoepub.app/Contents/MacOS/pdftoepub" 2>/dev/null; sleep 1
   open -n --env "$BR" --env "DATA_DIR=$T/data" "$T/pdftoepub.app"
   for _ in $(seq 1 90); do port=$(lsof -nP -a -c pdftoepub -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}' | head -1); [ -n "$port" ] && break; sleep 1; done
@@ -132,6 +160,9 @@ test_linux() {  # $1 = arm64|x86_64
       /tmp/p --_spawn 2>&1 | tail -1 > /w/out/lin_'$a'_'$tag'.spawn
       /tmp/p /w/fx/single_column.pdf -o /w/out/lin_'$a'_'$tag'_text.epub -q >/dev/null 2>&1
       /tmp/p /w/fx/scanned.pdf -o /w/out/lin_'$a'_'$tag'_scan.epub -q > /w/out/lin_'$a'_'$tag'.scanlog 2>&1; grep -c "1 OCR" /w/out/lin_'$a'_'$tag'.scanlog > /w/out/lin_'$a'_'$tag'.ocr
+      /tmp/p /w/fx/glued_fr.pdf -o /w/out/lin_'$a'_'$tag'_glued.epub -q >/dev/null 2>&1
+      /tmp/p /w/fx/book.pdf -o /w/out/lin_'$a'_'$tag'_book.epub -q >/dev/null 2>&1
+      /tmp/p --_licenses > /w/out/lin_'$a'_'$tag'.licenses 2>&1
       # no-argument launch: look for the printed URL, then GET /healthz through bash /dev/tcp
       BROWSER=true /tmp/p > /tmp/noarg.log 2>&1 &
       for i in $(seq 1 40); do u=$(grep -o "http://127.0.0.1:[0-9]*" /tmp/noarg.log | head -1); [ -n "$u" ] && break; sleep 1; done
@@ -142,6 +173,7 @@ test_linux() {  # $1 = arm64|x86_64
     scan_log_ok "$W/out/lin_${a}_${tag}.scanlog"
     [ "$(cat "$W/out/lin_${a}_${tag}.ocr")" = 1 ] && check_epub "$W/out/lin_${a}_${tag}_scan.epub" "Optical character recognition" && pass "CLI OCR (bundled tesseract)" || fail "CLI OCR"
     [ "$(cat "$W/out/lin_${a}_${tag}.noarg" 2>/dev/null)" = ok ] && pass "no-argument launch serves" || fail "no-argument launch"
+    check_extras "lin_${a}_${tag}"
   done
   echo "== linux-$a serve scenarios (debian:11-slim container, host curl)"
   local n=0 sc
@@ -165,6 +197,9 @@ test_windows() {
     for t in 1 2 3; do wine p.exe --_spawn 2>&1 | tail -1 > /w/out/win.spawn; grep -q "spawn ok" /w/out/win.spawn && break; done
     wine p.exe Z:/w/fx/single_column.pdf -o Z:/w/out/win_text.epub -q >/dev/null 2>&1
     for t in 1 2 3; do wine p.exe Z:/w/fx/scanned.pdf -o Z:/w/out/win_scan.epub -q 2>&1 | cat > /w/out/win.scanlog; grep -q chapters /w/out/win.scanlog && break; done; grep -c "1 OCR" /w/out/win.scanlog > /w/out/win.ocr
+    for t in 1 2 3; do wine p.exe Z:/w/fx/glued_fr.pdf -o Z:/w/out/win_glued.epub -q 2>&1 | cat >/dev/null; [ -s /w/out/win_glued.epub ] && break; done
+    for t in 1 2 3; do wine p.exe Z:/w/fx/book.pdf -o Z:/w/out/win_book.epub -q 2>&1 | cat >/dev/null; [ -s /w/out/win_book.epub ] && break; done
+    for t in 1 2 3; do wine p.exe --_licenses 2>&1 | cat > /w/out/win.licenses; grep -q wordfreq /w/out/win.licenses && break; done
     (tail -f /dev/null | wine p.exe 2>&1 | cat > /tmp/noarg.log &)
     for i in $(seq 1 60); do u=$(grep -o "http://127.0.0.1:[0-9]*" /tmp/noarg.log | head -1); [ -n "$u" ] && break; sleep 1; done
     p=${u##*:}; for i in $(seq 1 30); do curl -sf localhost:$p/healthz >/dev/null && echo ok > /w/out/win.noarg && break; sleep 1; done' >/dev/null 2>&1
@@ -173,6 +208,7 @@ test_windows() {
   tr -d '\r' < "$W/out/win.scanlog" > "$W/out/win.scanlog2" 2>/dev/null; grep -v "assertion failed\|rt_sigreturn" "$W/out/win.scanlog2" > "$W/out/win.scanlog3"; scan_log_ok "$W/out/win.scanlog3"
   [ "$(cat "$W/out/win.ocr" 2>/dev/null)" = 1 ] && check_epub "$W/out/win_scan.epub" "Optical character recognition" && pass "CLI OCR (bundled Windows tesseract)" || fail "CLI OCR"
   [ "$(cat "$W/out/win.noarg" 2>/dev/null)" = ok ] && pass "no-argument launch serves" || fail "no-argument launch"
+  check_extras win
   local sc n=0
   for sc in "X=1|$SCEN_DEFAULT" "MAX_PAGES=1|$SCEN_PAGES" "JOB_TIMEOUT_S=0.2|$SCEN_TIMEOUT"; do
     n=$((n+1)); local envs=${sc%%|*} modes=${sc##*|} got=0 attempt
@@ -208,9 +244,10 @@ PYEOF
   echo "$out" | grep -q "EPUBCHECK_BAD 0" && pass "epubcheck clean" || fail "epubcheck"
 }
 
-# ONLY=windows|macos|linux limits the run (debugging); default runs everything
+# ONLY=windows|macos|macos-arm64|macos-x86_64|linux limits the run (debugging); default runs everything
 case "${ONLY:-all}" in
   windows) test_windows;; macos) test_macos arm64; test_macos x86_64;; linux) test_linux arm64; test_linux x86_64;;
+  macos-arm64) test_macos arm64;; macos-x86_64) test_macos x86_64;;
   *) test_windows; test_macos arm64; test_macos x86_64; test_linux arm64; test_linux x86_64; epubcheck_all;;
 esac
 (cd "$DIST" && : > SHA256SUMS && for f in pdftoepub-*; do case $f in *.zip|*-dir) ;; *) shasum -a 256 "$f" >> SHA256SUMS;; esac; done; echo; cat SHA256SUMS)

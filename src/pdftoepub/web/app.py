@@ -30,7 +30,7 @@ try:
 
     VERSION = _dist_version("pdftoepub")
 except Exception:  # not installed (frozen / source tree)
-    VERSION = "0.1.0"
+    VERSION = "0.2.0"
 LOCAL_CLIENTS = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 STATIC = Path(__file__).parent / "static"
 CHUNK = 1024 * 1024

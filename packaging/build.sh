@@ -97,6 +97,7 @@ build_mac() {  # $1 = arm64 | x86_64 (x86_64 runs under Rosetta on Apple silicon
     "${A[@]}" "$v/bin/pyinstaller" --noconfirm --clean --distpath "$W/out" --workpath "$W/work" pdftoepub.spec) >"$W/pyinstaller.log" 2>&1 \
     || { tail -20 "$W/pyinstaller.log"; exit 1; }
   find "$W/out" \( -iname "*pymupdf*" -o -iname "fitz*" \) | grep . && { echo "ERROR: PyMuPDF files present"; exit 1; }
+  [ -n "$(find "$W/out/pdftoepub.app" -name large_fr.msgpack.gz)" ] || { echo "ERROR: wordfreq lexicon not bundled"; exit 1; }
   lipo -archs "$W/out/pdftoepub/pdftoepub" | grep -qw "$arch" || { echo "ERROR: wrong architecture"; exit 1; }
   packaging/audit_minos.sh "$W/out/pdftoepub.app" "${MAC_MIN_OS:-12.0}" || [ -n "${ALLOW_NEWER_MACOS:-}" ] \
     || { echo "ERROR: some code needs a newer macOS than ${MAC_MIN_OS:-12.0} (ALLOW_NEWER_MACOS=1 to accept)"; exit 1; }
@@ -126,6 +127,9 @@ build_windows() {  # experimental: PyInstaller + Windows Python + Windows Tesser
   echo "OK: pdftoepub-windows-x86_64.exe built (under Wine)"
 }
 
+# wordfreq lexicons (glued-word splitter), fetched once into src/ (pinned, sha256-checked; no-op when present): the
+# spec bundles them from there, and the Docker builds below copy src/ with them
+python3 src/pdftoepub/core/lexicon.py fetch >/dev/null || { echo "cannot fetch the wordfreq lexicons"; exit 1; }
 for t in "${TARGETS[@]}"; do
   case $t in mac|mac-arm64) build_mac arm64;; mac-x86_64) build_mac x86_64;; linux-arm64) build_linux arm64;; linux-x86_64) build_linux x86_64;; windows) build_windows;; *) echo "unknown target $t"; exit 1;; esac
 done

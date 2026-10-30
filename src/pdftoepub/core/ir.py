@@ -124,6 +124,7 @@ class PageData:
     source: str = "native"  # "native" | "ocr"
     ocr_layer: bool = False  # native text that is an invisible OCR layer (Tesseract GlyphLessFont): sizes are noisy
     scanned: bool = False  # the page is a full-page scan image (its text, if any, came from an OCR program)
+    scan_ids: list = field(default_factory=list)  # its full-page images (kept for the cover after pd.images drops them)
     ocr_failed: bool = False
     has_graphics: bool = False
     bad_chars: int = 0  # unmapped glyphs (e.g. '(cid:12)') removed by the backend

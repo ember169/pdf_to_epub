@@ -11,6 +11,14 @@ if os.environ.get("TESS_DIR"):
     datas += [(os.environ["TESS_DIR"], "tesseract")]
 if os.environ.get("LICENSES_FILE"):
     datas += [(os.environ["LICENSES_FILE"], ".")]
+# wordfreq lexicons for the glued-word splitter: git-ignored, so not in the installed wheel; taken from src/, where
+# `python src/pdftoepub/core/lexicon.py fetch` puts them (pinned, sha256-checked). No build without them.
+LEX = os.path.join(SPECPATH, "..", "src", "pdftoepub", "core", "data", "wordfreq")
+_missing = [f for f in ("large_fr.msgpack.gz", "large_en.msgpack.gz", "LICENSE.txt", "NOTICE.txt")
+            if not os.path.isfile(os.path.join(LEX, f))]
+if _missing:
+    raise SystemExit(f"wordfreq data missing in {LEX}: {_missing} (run: python src/pdftoepub/core/lexicon.py fetch)")
+datas += [(LEX, "pdftoepub/core/data/wordfreq")]
 binaries = collect_dynamic_libs("pypdfium2") + collect_dynamic_libs("pypdfium2_raw")
 
 a = Analysis(
@@ -29,7 +37,7 @@ if os.environ.get("ONEDIR"):
     if os.environ.get("MAC_APP"):  # double-clickable macOS app: no args -> web UI in the browser
         app = BUNDLE(
             coll, name="pdftoepub.app", bundle_identifier="org.pdftoepub.app",
-            icon=os.environ.get("MAC_ICON") or None, version=os.environ.get("APP_VERSION", "0.1.0"),
+            icon=os.environ.get("MAC_ICON") or None, version=os.environ.get("APP_VERSION", "0.2.0"),
             info_plist={
                 "CFBundleDisplayName": "pdftoepub",
                 "LSUIElement": True,  # no Dock icon/menu bar: it is a local web server; quit from the web UI

@@ -41,6 +41,8 @@ RUN python3 -m venv /hostpip && /hostpip/bin/pip install -q --require-hashes --n
       --only-binary=:all: --no-deps -r packaging/windows-requirements.txt \
  && for w in /wheels/*.whl; do unzip -q -o "$w" -d /pynuget/tools/Lib/site-packages; done \
  && ls /pynuget/tools/Lib/site-packages | head -50
+# wordfreq lexicons for the spec (normally already fetched into src/ by build.sh; sha256-checked either way)
+RUN python3 src/pdftoepub/core/lexicon.py fetch
 RUN wine /pynuget/tools/python.exe packaging/gen_licenses.py Z:/THIRD_PARTY_LICENSES --tesseract
 RUN cd packaging && TESS_DIR='Z:\tess' LICENSES_FILE='Z:\THIRD_PARTY_LICENSES' WINEPATH= \
     wine /pynuget/tools/python.exe -m PyInstaller --noconfirm --clean --distpath Z:/out --workpath Z:/tmp/w pdftoepub.spec || true

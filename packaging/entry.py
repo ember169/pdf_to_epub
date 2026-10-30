@@ -53,6 +53,9 @@ if __name__ == "__main__":
         r = subprocess.run([cmd, "--list-langs"], capture_output=True, text=True)
         print(r.returncode, r.stdout.strip().replace("\n", " "), r.stderr.strip()[:500])
         raise SystemExit(0)
+    if sys.argv[1:] == ["--_licenses"]:  # smoke test: the THIRD_PARTY_LICENSES bundled inside the binary
+        sys.stdout.write((Path(getattr(sys, "_MEIPASS", ".")) / "THIRD_PARTY_LICENSES").read_text(encoding="utf-8"))
+        raise SystemExit(0)
     if sys.argv[1:] == ["--_warmup"]:  # first-run helper: touch every native lib once so macOS scans them now, not later
         import subprocess
         for m in ("pdftoepub.web.app", "pdftoepub.core.pipeline", "pdfminer.high_level", "pypdfium2", "PIL.Image", "cryptography.hazmat.backends"):

@@ -8,54 +8,83 @@
 
 ## Français
 
-**Transformez un PDF en vrai livre numérique (EPUB) qui s'adapte à tous les écrans. Gratuit, privé, sur votre
-ordinateur.**
+**Transformez un PDF en vrai livre numérique (EPUB) qui s'adapte à tous les écrans. Gratuit, libre, et tout se passe
+sur votre ordinateur.**
 
 ![Une page scannée du « Roman expérimental » de Zola devient un texte EPUB qui se recompose sur téléphone, en petite et en grande police](docs/images/pdf-vers-epub.jpg)
 
 *À gauche, une page scannée (Zola, 1902). À droite, le même texte dans l'EPUB produit, sur un téléphone en petite puis
 en grande police. Résultat brut, sans retouche : les petites erreurs de reconnaissance de texte restent visibles.*
 
-Le livre obtenu contient du vrai texte (titres, paragraphes, listes, tableaux, images, notes) et non des images de
-pages : il se recompose selon la taille de police choisie sur la liseuse ou le téléphone. Les pages scannées sont lues
-par la reconnaissance de texte intégrée (OCR, français et anglais). Rien n'est envoyé à un service extérieur.
+Un PDF fige la page : sur une liseuse ou un téléphone, il faut zoomer et faire défiler. pdftoepub en extrait le texte et
+la structure pour produire un EPUB **recomposable** : la taille de police, les marges et la mise en page suivent votre
+appareil. Il fonctionne aussi bien sur des documents nés numériques (romans, articles, manuels) que sur des **livres
+scannés**, grâce à la reconnaissance de texte (OCR) intégrée.
+
+### Ce que fait pdftoepub
+
+**Un livre bien structuré**
+- Chapitres et table des matières : depuis le sommaire du PDF quand il existe, sinon depuis les titres, la table des
+  matières imprimée (« Sommaire », « Table des matières », « Contents » : parties, chapitres numérotés, sections) ou la
+  mise en page des débuts de chapitre sur les livres scannés.
+- Ouvrages collectifs : chaque chapitre a son titre numéroté et ses auteurs en signature, les parties regroupent leurs
+  chapitres.
+- Une vraie couverture en tête du livre, et les métadonnées retrouvées : titre, auteurs ou directeurs d'ouvrage,
+  éditeur, année, ISBN, langue.
+
+**Un texte propre**
+- En-têtes et pieds de page courants, numéros de page retirés ; mots coupés en fin de ligne recollés ; paragraphes
+  recousus d'une page à l'autre.
+- Notes de bas de page et notes de fin de chapitre reliées à leur appel, avec retour au texte.
+- Numéros de page imprimés conservés dans le livre (liste des pages), pour pouvoir citer une page.
+- Listes, tableaux, images et légendes, liens ; articles en deux colonnes remis dans l'ordre de lecture ; formules
+  mathématiques (formules en deux dimensions en image avec leur texte, indices et exposants en texte).
+
+**Des livres scannés lisibles**
+- OCR intégré (Tesseract, français et anglais) pour les pages qui ne sont que des images ; les pages blanches et les
+  images sans contenu sont écartées, les pages en blanc sur noir sont lues aussi.
+- Corrections prudentes des erreurs de reconnaissance courantes : lettres espacées, mots collés (« danslavie » →
+  « dans la vie », en français et en anglais), confusions classiques.
+
+**Privé et sûr**
+- Tout se passe sur votre ordinateur : aucun fichier n'est envoyé à un service extérieur.
+- Les EPUB produits sont valides (vérifiés avec epubcheck) et sans DRM.
+
+Trois façons de l'utiliser : une **application** (une page s'ouvre dans votre navigateur), un outil en **ligne de
+commande**, ou un **serveur** à héberger vous-même (Docker).
 
 ### Pour commencer
 
-1. **Téléchargez** le fichier correspondant à votre ordinateur dans le tableau [Télécharger](#télécharger)
-   (Mac : `.dmg` ; Windows : `.exe` ; Linux : le fichier `linux`).
+1. **Téléchargez** le fichier correspondant à votre ordinateur depuis la
+   [dernière version](https://github.com/ember169/pdf_to_epub/releases/latest) :
+
+   | Système | Fichier | Taille | Minimum |
+   |---|---|---|---|
+   | Mac avec puce Apple (M1 et suivantes) | `pdftoepub-macos-arm64.dmg` | ≈ 40 Mo | macOS 12 Monterey |
+   | Mac avec processeur Intel | `pdftoepub-macos-x86_64.dmg` | ≈ 42 Mo | macOS 12 Monterey |
+   | Mac, ligne de commande seule | `pdftoepub-macos-arm64` / `pdftoepub-macos-x86_64` | ≈ 37 / 38 Mo | macOS 12 |
+   | Windows | `pdftoepub-windows-x86_64.exe` | ≈ 88 Mo | Windows 64 bits (testé sous Wine uniquement) |
+   | Linux (PC) | `pdftoepub-linux-x86_64` | ≈ 73 Mo | glibc 2.31 (Debian 11, Ubuntu 20.04 ou plus récent) |
+   | Linux (ARM) | `pdftoepub-linux-arm64` | ≈ 72 Mo | idem |
+
+   Chaque fichier inclut l'OCR ; rien d'autre à installer (ni Python, ni Tesseract). Les empreintes sont dans
+   `SHA256SUMS`. Sur Mac, choisissez selon la puce ( menu → À propos de ce Mac).
 2. **Mac :** ouvrez le `.dmg`, glissez `pdftoepub.app` dans Applications, puis double-cliquez dessus.
-   **Windows :** double-cliquez sur le `.exe`. Rien d'autre à installer (ni Python, ni OCR).
-3. Au premier lancement, le système affiche un avertissement car l'application n'est pas signée : voir
+   **Windows :** double-cliquez sur le `.exe`.
+3. Au premier lancement, le système prévient que l'application n'est pas signée : voir
    [Premier lancement](#premier-lancement-dune-version-non-signée) (une seule fois).
-4. Votre navigateur s'ouvre : déposez vos PDF, cliquez **Convertir**, puis **Télécharger**. Tout reste sur votre
-   ordinateur. Pour arrêter, cliquez **Quitter** dans la page (sinon l'application s'arrête seule après 15 minutes
-   sans utilisation).
+4. Votre navigateur s'ouvre : déposez vos PDF, cliquez **Convertir**, puis **Télécharger**. Pour arrêter, cliquez
+   **Quitter** dans la page (l'application s'arrête aussi seule après 15 minutes sans utilisation).
 
 <p align="center"><img src="docs/images/interface-fr.jpg" alt="La page de pdftoepub après la conversion de deux PDF, dont un scan lu par OCR, avec les boutons Télécharger et Aperçu" width="460"></p>
 
-### Télécharger
-
-Depuis la [dernière version](https://github.com/ember169/pdf_to_epub/releases/latest). Chaque fichier inclut l'OCR
-(Tesseract avec les données française et anglaise) ; leurs empreintes sont dans `SHA256SUMS`.
-
-| Système | Fichier | Taille | Minimum |
-|---|---|---|---|
-| Mac avec puce Apple (M1 et suivantes) | `pdftoepub-macos-arm64.dmg` | 40 Mo | macOS 12 Monterey |
-| Mac avec processeur Intel | `pdftoepub-macos-x86_64.dmg` | 42 Mo | macOS 12 Monterey |
-| Mac, ligne de commande seule | `pdftoepub-macos-arm64` / `pdftoepub-macos-x86_64` | 37 / 38 Mo | macOS 12 |
-| Windows | `pdftoepub-windows-x86_64.exe` | 88 Mo | Windows 64 bits (testé sous Wine uniquement) |
-| Linux (PC) | `pdftoepub-linux-x86_64` | 73 Mo | glibc 2.31 (Debian 11, Ubuntu 20.04 ou plus récent) |
-| Linux (ARM) | `pdftoepub-linux-arm64` | 72 Mo | idem |
-
-Il n'y a pas de fichier Mac « universel » : choisissez selon la puce ( menu → À propos de ce Mac). La version
-minimale de macOS est mesurée sur chaque binaire au moment du build (`packaging/audit_minos.sh`) ; elle n'a pas été
-essayée sur un vrai Mac sous macOS 12.
+Ouvrez ensuite le fichier `.epub` dans votre application de lecture (Apple Livres, Calibre, Kobo, Thorium, la plupart
+des liseuses ; pour Kindle, passez par « Envoyer vers Kindle », qui accepte les EPUB).
 
 ### Premier lancement d'une version non signée
 
 Les versions publiées ne sont **pas signées** par un certificat Apple ou Microsoft (c'est payant chaque année) : le
-système avertit une seule fois. C'est normal ; ensuite, l'application s'ouvre directement.
+système avertit une seule fois. Ensuite, l'application s'ouvre directement.
 
 **macOS 15 Sequoia et plus récent** (l'ancien clic droit → Ouvrir ne fonctionne plus) :
 
@@ -76,221 +105,211 @@ Terminal :
 `xattr -d com.apple.quarantine pdftoepub-macos-arm64 && chmod +x pdftoepub-macos-arm64`
 (pour l'application : `xattr -dr com.apple.quarantine /Applications/pdftoepub.app`).
 
-(Les libellés des fenêtres correspondent aux versions actuelles de macOS et Windows et peuvent varier légèrement.)
+Le premier lancement sur Mac décompresse environ 100 Mo dans `~/Library/Caches/pdftoepub/` (une quinzaine de
+secondes, une seule fois) ; supprimez ce dossier pour désinstaller.
 
 ### Ligne de commande
 
-Chaque fichier téléchargé est aussi un outil en ligne de commande (sur macOS, l'exécutable de l'application est
+Chaque fichier téléchargé est aussi un outil en ligne de commande (sur Mac, l'exécutable de l'application est
 `/Applications/pdftoepub.app/Contents/MacOS/pdftoepub`) :
 
 ```bash
-./pdftoepub-linux-x86_64 livre.pdf -o livre.epub
-./pdftoepub-linux-x86_64 serve --open        # page web sur http://127.0.0.1:8000
-./pdftoepub-linux-x86_64                     # sans argument : lance la page web et ouvre le navigateur
+pdftoepub livre.pdf -o livre.epub
+pdftoepub serve --open        # la page web sur http://127.0.0.1:8000
+pdftoepub                     # sans argument : lance la page web et ouvre le navigateur
 ```
 
 | Option | Par défaut | Rôle |
 |---|---|---|
-| `--title`, `--author` | métadonnées du PDF | Remplacer le titre ou l'auteur |
+| `--title`, `--author` | retrouvés dans le PDF | Remplacer le titre ou l'auteur |
 | `--language` | détectée | Code BCP 47, par exemple `fr` |
 | `--ocr` | `auto` | `auto` (pages sans texte), `off`, `force` |
 | `--ocr-langs` | `fra+eng` | Langues Tesseract |
 | `--keep-headers-footers` | non | Garder les en-têtes, pieds de page et numéros de page |
 | `--no-columns` | non | Désactiver l'ordre de lecture en colonnes |
-| `--no-images` | non | Ne pas inclure les images |
-| `--timeout`, `--max-mem`, `--max-pages` | aucune | Arrêter les conversions trop longues, trop gourmandes en mémoire ou trop volumineuses |
+| `--no-images` | non | Ne pas inclure les images (ni la couverture) |
+| `--timeout`, `--max-mem`, `--max-pages` | aucune | Arrêter les conversions trop longues, trop gourmandes ou trop volumineuses |
 
-`pdftoepub --help` les liste toutes. La page web propose les mêmes choix sous *Options avancées*.
+`pdftoepub --help` les liste toutes ; la page web propose les mêmes choix sous *Options avancées*. Pour l'OCR, les
+variables `TESSERACT_CMD` / `TESSDATA_PREFIX`, ou un dossier `tesseract/` à côté de l'exécutable, remplacent la copie
+intégrée (par exemple pour ajouter des langues).
 
-**OCR :** les binaires embarquent Tesseract (macOS : 5.5.4 compilé depuis les sources ; Windows : 5.4 ; Linux : 4.1)
-avec les données `tessdata_fast` française et anglaise (environ 5 Mo ; un peu moins précises sur les mauvais scans que
-`tessdata_best`, environ 20 Mo). Les pages qui sont des images de texte sont reconnues automatiquement et signalées dans
-le résultat pour que vous puissiez les relire. `TESSERACT_CMD` / `TESSDATA_PREFIX`, ou un dossier `tesseract/` à côté de
-l'exécutable, remplacent la copie intégrée.
-
-**Lanceur macOS :** le premier lancement décompresse environ 100 Mo dans `~/Library/Caches/pdftoepub/` (une quinzaine
-de secondes, une seule fois, le temps que macOS analyse les nouveaux fichiers) ; ensuite, un PDF de 2 pages se convertit
-en 0,3 s. Supprimez ce dossier pour désinstaller.
-
-### Hébergement sur un serveur (Docker)
+### Héberger sur un serveur (Docker)
 
 ```bash
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-Ouvrez <http://localhost:8000>. Le fichier compose publie le port sur **127.0.0.1 uniquement**. Le conteneur tourne en
-lecture seule, sans droits root, avec une limite mémoire (`MEM_LIMIT`, 2g par défaut), 256 processus et aucune
-capacité système ; les fichiers envoyés et les résultats vivent dans le volume `pdftoepub-data` et sont supprimés après
-`JOB_TTL_HOURS`. L'image inclut Tesseract (français, anglais).
-
-**Hébergement public :** définissez `AUTH_TOKEN` (la page le demande alors), gardez le port lié à localhost et placez un
-proxy TLS devant : [`deploy/Caddyfile.example`](deploy/Caddyfile.example) (désactive la mise en tampon du flux de
-progression, limite la taille des envois). Définissez `ALLOWED_HOSTS` avec votre domaine. Toutes les variables du
-serveur (`MAX_UPLOAD_MB`, `MAX_PAGES`, `JOB_TIMEOUT_S`, `JOB_MAX_MEM_MB`, `MAX_CONCURRENT_JOBS`…) sont décrites dans
-[`src/pdftoepub/web/README.md`](src/pdftoepub/web/README.md). `GET /healthz` sert aux contrôles de santé.
+Ouvrez <http://localhost:8000>. Le port est publié sur **127.0.0.1 uniquement** ; le conteneur tourne en lecture seule,
+sans droits root, avec une limite mémoire, et supprime les fichiers après `JOB_TTL_HOURS`. Pour un accès public,
+définissez `AUTH_TOKEN` et `ALLOWED_HOSTS` et placez un proxy TLS devant
+([`deploy/Caddyfile.example`](deploy/Caddyfile.example)). Toutes les variables sont décrites dans
+[`src/pdftoepub/web/README.md`](src/pdftoepub/web/README.md).
 
 ### Qualité
 
-Mesurée sur 18 PDF du domaine public ou sous licence libre (3 362 pages : romans en français et en anglais, articles
-arXiv, un manuel de 1 185 pages, livres de mathématiques, livres scannés d'Internet Archive) ; détails et méthode dans
-[`tests/corpus/REPORT.md`](tests/corpus/REPORT.md) :
+Mesurée sur un corpus de 18 PDF du domaine public ou sous licence libre (3 362 pages : romans en français et en
+anglais, articles arXiv, un manuel de 1 185 pages, livres de mathématiques, livres scannés d'Internet Archive), et sur
+un livre scanné réel de 420 pages ; méthode et résultats détaillés dans [`tests/corpus/REPORT.md`](tests/corpus/REPORT.md) :
 
 - **98,3 %** des mots retrouvés (les en-têtes courants et numéros de page sont retirés volontairement) et un score
-  d'ordre de lecture de **0,948** (suites de 6 mots dans le bon ordre).
-- **0 erreur epubcheck** sur les 18 livres, avec les deux moteurs de lecture PDF.
-- Les livres scannés retrouvent leurs chapitres à partir de la mise en page : 7 essais sur 7 dans *Le Roman
-  expérimental* de Zola, 3 sur 3 dans *An Island Plant*.
-- Livres de mathématiques : les formules en deux dimensions deviennent des images accompagnées de leur texte ; les
-  coupures de paragraphe en milieu de phrase dans *Calculus Made Easy* passent de 87 à 47 pour 1 000 paragraphes.
+  d'ordre de lecture de **0,95** (suites de 6 mots dans le bon ordre).
+- **0 erreur epubcheck** sur tous les livres, avec les deux moteurs de lecture PDF.
+- Livres scannés : 7 chapitres et 13 sections sur 7 et 13 retrouvés dans *Le Roman expérimental* de Zola ; sur le livre
+  de 420 pages, les 21 parties et chapitres de la table des matières imprimée, et 316 appels de note reliés à leur note.
 
 ### Limites
 
-- Taille maximale d'envoi : `MAX_UPLOAD_MB` ; les PDF chiffrés (protégés par mot de passe) et les fichiers non PDF sont
-  refusés.
-- L'analyse de mise en page est heuristique : les mises en page complexes (tableaux imbriqués, magazines, notes en
-  marge) peuvent demander une retouche manuelle.
-- Mathématiques : pas de MathML. Les formules en deux dimensions deviennent des images (avec la formule en texte
-  linéaire comme description) ; les formules sur une ligne, indices, exposants et fractions en ligne (`a/b`) restent
-  du texte.
-- Livres scannés sans sommaire PDF : les chapitres sont trouvés à partir de la mise en page et d'une table des matières
-  imprimée (parties, chapitres numérotés, sections, numéros de page imprimés) ; les titres et le texte gardent une
-  partie de leurs erreurs de reconnaissance, et les notes absentes de la couche OCR manquent.
-- Notes de fin : reliées à leur appel quand celui-ci est en exposant ; un appel mal reconnu reste sans lien.
-- Les figures vectorielles sont converties en images ; la qualité de l'OCR dépend du scan et des langues choisies.
-- Un seul processus serveur ; pas de répartition sur plusieurs machines.
+- L'analyse de mise en page est heuristique : les mises en page complexes (magazines, tableaux imbriqués, notes en
+  marge) peuvent demander une retouche.
+- Mathématiques : pas de MathML ; les formules en deux dimensions sont des images (avec leur texte comme description).
+- Livres scannés : le texte garde une partie des erreurs de reconnaissance, et ce que la couche OCR d'un PDF a manqué
+  (une note, une ligne) reste manquant. Les corrections de mots collés ne concernent que le français et l'anglais.
+- Les figures vectorielles deviennent des images ; les PDF protégés par mot de passe sont refusés.
 
-### Site web (prévu)
+### Droits d'usage
 
-Un site GitHub Pages est prévu à l'adresse <https://ember169.github.io/pdf_to_epub/> : présentation, tableau de
-téléchargement, captures d'écran et FAQ sur l'ouverture des applications non signées. Ses sources seront dans `docs/`
-(qui contient déjà les illustrations ; la page `index.html` n'existe pas encore) et publiées avec le réglage Pages
-« Deploy from a branch » (branche `main`, dossier `/docs`, le seul sous-dossier que ce réglage peut servir), sans
-GitHub Actions.
+**Le logiciel** est sous [licence MIT](LICENSE) : vous pouvez l'utiliser, le copier, le modifier et le redistribuer,
+y compris dans un cadre commercial, à condition de conserver la notice de copyright et de licence. Il est fourni sans
+garantie.
 
-### Publication des versions (build local, sans CI)
+**Vos documents** restent les vôtres : pdftoepub ne revendique aucun droit sur ce que vous convertissez et n'envoie rien
+nulle part. La conversion ne change rien au droit d'auteur du contenu : convertissez les documents que vous avez le
+droit d'utiliser (achetés, sous licence libre, du domaine public, ou les vôtres). Les EPUB produits ne contiennent pas
+de DRM.
 
-Il n'y a pas de CI : tout est construit et testé sur un Mac (Docker pour Linux, Wine dans Docker pour Windows), puis
-envoyé.
+**Composants inclus.** Les applications et l'image Docker embarquent des logiciels et des données de tiers, chacun sous
+sa licence (la liste complète est dans `THIRD_PARTY_LICENSES`, fourni avec chaque binaire) :
+- Python (PSF), pdfminer.six (MIT), pypdfium2 et PDFium (Apache-2.0 / BSD-3), Pillow (HPND) ;
+- Tesseract (Apache-2.0), Leptonica (BSD-2), libpng, et les données `tessdata_fast` française et anglaise
+  (Apache-2.0) ;
+- les listes de fréquence de mots [wordfreq](https://github.com/rspeer/wordfreq) 3.2 (`large_fr`, `large_en`, non
+  modifiées), qui servent à séparer les mots collés par l'OCR. Ces **données** sont sous **CC BY-SA 4.0** (le code de
+  wordfreq est sous Apache-2.0) : si vous les redistribuez, gardez leur attribution (`pdftoepub/core/data/wordfreq/NOTICE.txt`),
+  et partagez-les sous la même licence si vous les modifiez.
 
-```bash
-packaging/build.sh mac-arm64 mac-x86_64 linux-arm64 linux-x86_64 windows   # tous les binaires dans dist/
-packaging/smoke.sh                       # teste chaque binaire en environnement vierge, réécrit dist/SHA256SUMS
-packaging/release.sh v0.1.0              # simulation : vérifie dist/, écrit SHA256SUMS, affiche la commande gh
-packaging/release.sh v0.1.0 --publish    # crée la version sur GitHub (nécessite `gh auth login`)
-```
+Un moteur de lecture PDF optionnel utilise [PyMuPDF](https://pymupdf.readthedocs.io/), sous **AGPL-3.0** : une
+installation qui l'inclut (`pip install ".[pymupdf]"`) relève de l'AGPL. Les applications et l'image Docker ne
+l'incluent pas.
 
-- macOS nécessite `uv`, cmake et les outils en ligne de commande Xcode. Lancez d'abord une fois
-  `packaging/build_tesseract_macos.sh` : il compile Tesseract, Leptonica et libpng depuis des sources épinglées et
-  vérifiées (sha256) pour les deux types de puce Mac (macOS 11 et plus).
-- Le build Mac Intel tourne sous Rosetta et utilise `packaging/macos-x86_64.lock` ; les builds Mac épinglent
-  pypdfium2 5.9.0 (le PDFium plus récent exige macOS 13). Le build échoue si un binaire exige un macOS plus récent que
-  12.0.
-- Linux est construit sur Debian 11 dans Docker et testé dans des conteneurs vierges `debian:11-slim` et
-  `ubuntu:20.04`. Windows est construit et testé sous Wine, jamais sur un vrai Windows ; `packaging/build.ps1` (build
-  Windows natif) n'a jamais été lancé.
-- Toutes les dépendances sont installées depuis des fichiers verrouillés avec empreintes (`requirements.lock`,
-  `packaging/*.lock` ; `packaging/relock.sh` les régénère). Les binaires ne contiennent pas PyMuPDF (le build échoue
-  s'il est présent).
+### Participer
 
-#### Signature (prête, pas encore utilisée)
+Toute aide est bienvenue : signaler un problème, proposer une amélioration, tester sur vos documents.
 
-Les versions actuelles ont une signature locale (ad hoc). Les scripts de vraie signature sont prêts et ont été validés
-de bout en bout avec des certificats auto-signés jetables ; il ne leur manque que les certificats.
+**Signaler un problème** : ouvrez une [issue](https://github.com/ember169/pdf_to_epub/issues) en indiquant votre
+système, la version, la commande ou les options utilisées et ce que vous attendiez. Si possible, joignez un PDF qui peut
+être partagé publiquement (domaine public, licence libre, ou un document à vous). **Ne joignez jamais un document
+protégé par le droit d'auteur** : décrivez plutôt le problème (une capture d'une page suffit souvent).
 
-| | Ce qui supprime l'avertissement | Script |
-|---|---|---|
-| macOS | Certificat **Developer ID Application** (Apple Developer Program, 99 USD/an) + notarisation | `packaging/sign_macos.sh` (appelé par `build.sh` ; runtime renforcé, horodatage, notarisation, agrafage) |
-| Windows | Certificat **Authenticode** (OV environ 100 à 300 USD/an ; EV ou Azure Trusted Signing possibles) | `packaging/sign_windows.sh` (osslsigncode, horodatage RFC 3161) |
-
-```bash
-xcrun notarytool store-credentials pdftoepub-notary --apple-id vous@example.com --team-id TEAMID   # une fois
-APPLE_SIGN_IDENTITY="Developer ID Application: Votre Nom (TEAMID)" APPLE_NOTARY_PROFILE=pdftoepub-notary \
-  packaging/build.sh mac-arm64 mac-x86_64
-WIN_SIGN_PFX=~/certs/codesign.pfx WIN_SIGN_PASSWORD=... packaging/sign_windows.sh
-```
-
-Vérifié avec des certificats auto-signés : macOS `codesign --verify --deep --strict` OK, l'application et l'outil en
-ligne de commande signés fonctionnent, OCR compris, sans exception de droits ; Windows `osslsigncode verify` OK et le
-`.exe` signé fonctionne sous Wine. La notarisation nécessite des identifiants Apple et n'a pas été testée.
-
-### Développement
+**Contribuer du code**
 
 ```bash
 python3.12 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
-pdftoepub livre.pdf -o livre.epub        # ligne de commande
-pdftoepub serve                          # page web sur le port 8000
-pytest                                   # les PDF de test sont générés à la volée (tests/fixtures/make_fixtures.py)
-docker build -f deploy/Dockerfile --target test -t pdftoepub-test . && docker run --rm pdftoepub-test   # + epubcheck
-python tests/corpus/fetch.py             # corpus de documents réels (téléchargés, vérifiés par sha256)
-python tests/corpus/evaluate.py --label moi
+pip install -e ".[dev]"                    # inclut PyMuPDF (AGPL) pour tester les deux moteurs
+python -m pdftoepub.core.lexicon fetch     # listes de fréquence wordfreq (facultatif, CC BY-SA 4.0)
+pytest -q tests src                        # toute la suite, une fois par moteur PDF
 ```
 
-Depuis une installation à partir des sources, l'OCR nécessite `tesseract` et ses langues
-(`brew install tesseract tesseract-lang`, `apt install tesseract-ocr-fra`) ; sans lui, les pages scannées sont
-ignorées avec un avertissement. epubcheck 5.4.0 est téléchargé une fois dans `tests/.cache` (vérifié par sha256 ;
-`EPUBCHECK_JAR` pour utiliser le vôtre) et ses tests sont ignorés sans `java`. La suite tourne une fois par moteur de
-lecture PDF (`PDFTOEPUB_BACKEND` = `pdfminer`, `pymupdf`).
+- L'OCR depuis les sources nécessite `tesseract` (`brew install tesseract tesseract-lang`,
+  `apt install tesseract-ocr-fra`) ; les tests epubcheck nécessitent `java` (le jar est téléchargé et vérifié une
+  fois).
+- Les tests créent leurs PDF à la volée (reportlab) : ajoutez un test pour chaque correction ou fonctionnalité, avec un
+  PDF synthétique (jamais de texte d'un livre protégé).
+- Toute modification de la conversion se mesure sur le corpus de documents réels, avant et après :
+  ```bash
+  python tests/corpus/fetch.py                     # télécharge le corpus (domaine public / licences libres, sha256)
+  python tests/corpus/evaluate.py --label avant    # sur la branche principale
+  python tests/corpus/evaluate.py --label apres    # avec votre modification
+  python tests/corpus/evaluate.py --compare avant apres
+  ```
+  Une modification ne doit faire régresser aucun document, et epubcheck doit rester à 0 erreur. Vous pouvez y ajouter
+  vos propres livres en local, sans jamais les publier (`tests/.corpus/private/`, ignoré par git).
+- Où se trouve quoi : la conversion dans [`src/pdftoepub/core/`](src/pdftoepub/core/README.md) (chaque étape y est
+  décrite), l'interface web et le serveur dans [`src/pdftoepub/web/`](src/pdftoepub/web/README.md), la ligne de
+  commande dans `src/pdftoepub/cli.py`, l'API publique dans `src/pdftoepub/api.py`, les applications dans `packaging/`
+  et le serveur Docker dans `deploy/`. La publication des versions est décrite dans [`RELEASING.md`](RELEASING.md).
 
-### Licence
-
-MIT (voir [`LICENSE`](LICENSE)). Moteur PDF par défaut : pdfminer.six (MIT) + pypdfium2 (Apache-2.0/BSD-3). Les
-binaires embarquent Python (PSF), PDFium, Tesseract (Apache-2.0), Leptonica (BSD-2), libpng et `tessdata_fast`
-(Apache-2.0) ; leurs licences figurent dans `THIRD_PARTY_LICENSES` (également inclus dans chaque binaire).
-
-Un moteur optionnel utilise [PyMuPDF](https://pymupdf.readthedocs.io/) (`pip install ".[pymupdf]"`,
-`PDFTOEPUB_BACKEND=pymupdf`). PyMuPDF est sous **AGPL-3.0** : une installation qui l'inclut relève de l'AGPL. Les
-binaires et l'image Docker ne l'incluent pas.
+En proposant une contribution, vous acceptez qu'elle soit publiée sous la licence MIT du projet.
 
 ---
 
 ## English
 
-**Turn a PDF into a real e-book (EPUB) that adapts to any screen. Free, private, runs on your own computer.**
+**Turn a PDF into a real e-book (EPUB) that adapts to any screen. Free, open source, and everything happens on your own
+computer.**
 
 ![A scanned page of An Island Plant becomes EPUB text that reflows on a phone at a small and a large font size](docs/images/pdf-to-epub.jpg)
 
 *Left: a scanned page (An Island Plant, 1896). Right: the same text in the generated EPUB, on a phone at a small then a
 large font size. Raw output, not retouched: small text-recognition mistakes are still visible.*
 
-The output contains real text (headings, paragraphs, lists, tables, images, footnotes), not page pictures, so it
-reflows with the reader's font size on an e-reader or a phone. Scanned pages are read with built-in text recognition
-(OCR, English and French). Nothing is sent to any external service.
+A PDF freezes the page: on an e-reader or a phone you zoom and scroll. pdftoepub extracts the text and its structure to
+build a **reflowable** EPUB: font size, margins and layout follow your device. It works on born-digital documents
+(novels, papers, textbooks) as well as on **scanned books**, with built-in text recognition (OCR).
+
+### What pdftoepub does
+
+**A well-structured book**
+- Chapters and table of contents: from the PDF outline when there is one, otherwise from the headings, from the printed
+  table of contents ("Contents", "Sommaire", "Table des matières": parts, numbered chapters, sections), or from the
+  layout of chapter openings in scanned books.
+- Edited volumes: each chapter gets its numbered title and its authors as a byline; parts hold their chapters.
+- A real cover at the start of the book, and the metadata recovered: title, authors or editors, publisher, year, ISBN,
+  language.
+
+**Clean text**
+- Running headers, footers and page numbers removed; words hyphenated at line ends rejoined; paragraphs stitched back
+  together across pages.
+- Footnotes and chapter endnotes linked to their reference, with a link back to the text.
+- Printed page numbers kept in the book (a page list), so you can cite a page.
+- Lists, tables, images and captions, links; two-column papers in reading order; mathematics (two-dimensional formulas
+  as pictures with their text, subscripts and superscripts as text).
+
+**Readable scanned books**
+- Built-in OCR (Tesseract, English and French) for pages that are only pictures; blank pages and empty pictures are left
+  out, and white-on-black pages are read too.
+- Careful fixes for common recognition mistakes: letter-spaced words, words run together ("ofthe" → "of the", in English
+  and French), classic character confusions.
+
+**Private and safe**
+- Everything happens on your computer: no file is sent to any external service.
+- The EPUBs are valid (checked with epubcheck) and DRM-free.
+
+Three ways to use it: an **app** (a page opens in your browser), a **command-line** tool, or a **server** you host
+yourself (Docker).
 
 ### Getting started
 
-1. **Download** the file for your computer from the [Download](#download) table (Mac: `.dmg`; Windows: `.exe`;
-   Linux: the `linux` file).
+1. **Download** the file for your computer from the
+   [latest release](https://github.com/ember169/pdf_to_epub/releases/latest):
+
+   | System | File | Size | Minimum |
+   |---|---|---|---|
+   | Mac with Apple silicon (M1 and later) | `pdftoepub-macos-arm64.dmg` | ≈ 40 MB | macOS 12 Monterey |
+   | Mac with Intel processor | `pdftoepub-macos-x86_64.dmg` | ≈ 42 MB | macOS 12 Monterey |
+   | Mac, command line only | `pdftoepub-macos-arm64` / `pdftoepub-macos-x86_64` | ≈ 37 / 38 MB | macOS 12 |
+   | Windows | `pdftoepub-windows-x86_64.exe` | ≈ 88 MB | 64-bit Windows (tested under Wine only) |
+   | Linux (PC) | `pdftoepub-linux-x86_64` | ≈ 73 MB | glibc 2.31 (Debian 11, Ubuntu 20.04 or newer) |
+   | Linux (ARM) | `pdftoepub-linux-arm64` | ≈ 72 MB | same |
+
+   Every file includes OCR; nothing else to install (no Python, no Tesseract). Checksums are in `SHA256SUMS`. On a Mac,
+   pick by chip ( menu → About This Mac).
 2. **Mac:** open the `.dmg`, drag `pdftoepub.app` to Applications, double-click it. **Windows:** double-click the
-   `.exe`. Nothing else to install (no Python, OCR included).
-3. The first launch shows a warning because the app is not signed: see
-   [First launch](#first-launch-of-an-unsigned-build) (once only).
-4. Your browser opens: drop your PDFs, click **Convert**, then **Download**. Everything stays on your computer. To stop
-   it, click **Quit** in the page (it also stops by itself after 15 minutes without use).
+   `.exe`.
+3. The first launch warns that the app is not signed: see [First launch](#first-launch-of-an-unsigned-build) (once
+   only).
+4. Your browser opens: drop your PDFs, click **Convert**, then **Download**. To stop it, click **Quit** in the page (it
+   also stops by itself after 15 minutes without use).
 
 <p align="center"><img src="docs/images/interface-en.jpg" alt="The pdftoepub page after converting two PDFs, one of them a scan read with OCR, with Download and Preview buttons" width="460"></p>
 
-### Download
-
-From the [latest release](https://github.com/ember169/pdf_to_epub/releases/latest). Every file includes OCR
-(Tesseract with English and French data) and checks against `SHA256SUMS`.
-
-| System | File | Size | Minimum |
-|---|---|---|---|
-| Mac with Apple silicon (M1 and later) | `pdftoepub-macos-arm64.dmg` | 40 MB | macOS 12 Monterey |
-| Mac with Intel processor | `pdftoepub-macos-x86_64.dmg` | 42 MB | macOS 12 Monterey |
-| Mac, command line only | `pdftoepub-macos-arm64` / `pdftoepub-macos-x86_64` | 37 / 38 MB | macOS 12 |
-| Windows | `pdftoepub-windows-x86_64.exe` | 88 MB | 64-bit Windows (tested under Wine only) |
-| Linux (PC) | `pdftoepub-linux-x86_64` | 73 MB | glibc 2.31 (Debian 11, Ubuntu 20.04 or newer) |
-| Linux (ARM) | `pdftoepub-linux-arm64` | 72 MB | same |
-
-There is no single "universal" Mac file: pick by chip ( menu → About This Mac). The minimum macOS is measured on every
-binary at build time (`packaging/audit_minos.sh`), not just declared; it was not tried on a real macOS 12 machine.
+Then open the `.epub` file in your reading app (Apple Books, Calibre, Kobo, Thorium, most e-readers; for Kindle, use
+"Send to Kindle", which accepts EPUB).
 
 ### First launch of an unsigned build
 
-The builds are **not signed** with an Apple or Microsoft certificate (that costs a yearly fee), so the system warns once.
-This is expected; afterwards the app opens normally.
+The builds are **not signed** with an Apple or Microsoft certificate (that costs a yearly fee), so the system warns
+once. Afterwards the app opens normally.
 
 **macOS 15 Sequoia and newer** (the old right-click → Open shortcut no longer works):
 
@@ -307,39 +326,34 @@ This is expected; afterwards the app opens normally.
 `xattr -d com.apple.quarantine pdftoepub-macos-arm64 && chmod +x pdftoepub-macos-arm64`
 (for the app: `xattr -dr com.apple.quarantine /Applications/pdftoepub.app`).
 
-(Dialog wording is from current macOS and Windows releases and may differ slightly between versions.)
+On a Mac the first launch unpacks about 100 MB into `~/Library/Caches/pdftoepub/` (about 15 s, once); delete that
+folder to uninstall.
 
 ### Command line
 
-Every download is also a command-line tool (on macOS the app's executable is
+Every download is also a command-line tool (on a Mac the app's executable is
 `/Applications/pdftoepub.app/Contents/MacOS/pdftoepub`):
 
 ```bash
-./pdftoepub-linux-x86_64 book.pdf -o book.epub
-./pdftoepub-linux-x86_64 serve --open        # web page on http://127.0.0.1:8000
-./pdftoepub-linux-x86_64                     # no arguments: starts the web page and opens the browser
+pdftoepub book.pdf -o book.epub
+pdftoepub serve --open        # the web page on http://127.0.0.1:8000
+pdftoepub                     # no arguments: starts the web page and opens the browser
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--title`, `--author` | from PDF metadata | Override the title or author |
+| `--title`, `--author` | recovered from the PDF | Override the title or author |
 | `--language` | detected | BCP 47 code, e.g. `en` |
 | `--ocr` | `auto` | `auto` (pages without text), `off`, `force` |
 | `--ocr-langs` | `fra+eng` | Tesseract languages |
 | `--keep-headers-footers` | off | Keep running headers/footers and page numbers |
 | `--no-columns` | off | Disable multi-column reading order |
-| `--no-images` | off | Leave images out |
+| `--no-images` | off | Leave images (and the cover) out |
 | `--timeout`, `--max-mem`, `--max-pages` | none | Stop conversions that take too long, too much memory or too many pages |
 
-`pdftoepub --help` lists them all. The web page offers the same choices under *Advanced options*.
-
-**OCR:** the binaries ship Tesseract (macOS: 5.5.4 built from source; Windows: 5.4; Linux: 4.1) with `tessdata_fast`
-English and French data (about 5 MB; a bit less accurate on poor scans than `tessdata_best`, about 20 MB). Pages that
-are pictures of text are recognised automatically and flagged in the result so you can proofread them.
-`TESSERACT_CMD` / `TESSDATA_PREFIX`, or a `tesseract/` folder next to the executable, override the bundled copy.
-
-**macOS launcher:** the first run unpacks about 100 MB into `~/Library/Caches/pdftoepub/` (about 15 s, once, while
-macOS scans the new files); after that a 2-page PDF converts in 0.3 s. Delete that folder to uninstall.
+`pdftoepub --help` lists them all; the web page offers the same choices under *Advanced options*. For OCR,
+`TESSERACT_CMD` / `TESSDATA_PREFIX`, or a `tesseract/` folder next to the executable, override the bundled copy (for
+example to add languages).
 
 ### Self-hosting (Docker)
 
@@ -347,116 +361,86 @@ macOS scans the new files); after that a 2-page PDF converts in 0.3 s. Delete th
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-Open <http://localhost:8000>. The compose file publishes the port on **127.0.0.1 only**. The container runs read-only,
-as a non-root user, with a memory limit (`MEM_LIMIT`, default 2g), 256 pids and no capabilities; uploads and results
-live in the `pdftoepub-data` volume and are deleted after `JOB_TTL_HOURS`. The image includes Tesseract (English,
-French).
-
-**Public hosting:** set `AUTH_TOKEN` (the page then asks for it), keep the localhost port mapping and put a TLS proxy in
-front: [`deploy/Caddyfile.example`](deploy/Caddyfile.example) (disables buffering of the progress stream, caps the
-upload size). Set `ALLOWED_HOSTS` to your domain. All server variables (`MAX_UPLOAD_MB`, `MAX_PAGES`, `JOB_TIMEOUT_S`,
-`JOB_MAX_MEM_MB`, `MAX_CONCURRENT_JOBS`, …) are listed in [`src/pdftoepub/web/README.md`](src/pdftoepub/web/README.md).
-`GET /healthz` serves health checks.
+Open <http://localhost:8000>. The port is published on **127.0.0.1 only**; the container runs read-only, as a non-root
+user, with a memory limit, and deletes files after `JOB_TTL_HOURS`. For public access, set `AUTH_TOKEN` and
+`ALLOWED_HOSTS` and put a TLS proxy in front ([`deploy/Caddyfile.example`](deploy/Caddyfile.example)). All variables
+are listed in [`src/pdftoepub/web/README.md`](src/pdftoepub/web/README.md).
 
 ### Quality
 
-Measured on 18 public-domain or openly licensed PDFs (3,362 pages: novels in English and French, arXiv papers, a
-1,185-page textbook, math books, scanned Internet Archive books); details and method in
-[`tests/corpus/REPORT.md`](tests/corpus/REPORT.md):
+Measured on a corpus of 18 public-domain or openly licensed PDFs (3,362 pages: novels in English and French, arXiv
+papers, a 1,185-page textbook, math books, scanned Internet Archive books), and on a real 420-page scanned book; method
+and detailed results in [`tests/corpus/REPORT.md`](tests/corpus/REPORT.md):
 
 - **98.3 %** of the words found (running heads and page numbers are removed on purpose) and a reading-order score of
-  **0.948** (6-word sequences in the right order).
-- **0 epubcheck errors** on all 18 books, with both PDF backends.
-- Scanned books get their chapters back from the page layout: 7 of 7 essays in Zola's *Le Roman expérimental*, 3 of 3
-  in *An Island Plant*.
-- Math books: two-dimensional formulas become pictures with a text alternative; mid-sentence paragraph breaks in
-  *Calculus Made Easy* fell from 87 to 47 per 1,000 paragraphs.
+  **0.95** (6-word sequences in the right order).
+- **0 epubcheck errors** on every book, with both PDF backends.
+- Scanned books: 7 of 7 chapters and 13 of 13 sections found in Zola's *Le Roman expérimental*; in the 420-page book, all
+  21 parts and chapters of the printed table of contents, and 316 note references linked to their note.
 
 ### Limits
 
-- Maximum upload size: `MAX_UPLOAD_MB`; encrypted (password-protected) and non-PDF files are rejected.
-- Layout analysis is heuristic: complex layouts (nested tables, magazines, marginal notes) may need manual cleanup.
-- Math: no MathML. Two-dimensional formulas become pictures (with the formula as linear text for the description);
-  one-line formulas, subscripts, superscripts and inline fractions (`a/b`) stay text.
-- Scanned books without a PDF outline: chapters are found from the page layout and a printed table of contents (parts,
-  numbered chapters, sections, printed page numbers); titles and text keep some recognition mistakes, and notes missing
-  from the OCR layer are missing.
-- Endnotes are linked to their reference when it is a superscript; a misread reference stays unlinked.
-- Vector figures are turned into pictures; OCR quality depends on the scan and the chosen languages.
-- One server process; no spreading across several machines.
+- Layout analysis is heuristic: complex layouts (magazines, nested tables, marginal notes) may need touching up.
+- Mathematics: no MathML; two-dimensional formulas are pictures (with their text as the description).
+- Scanned books: the text keeps some recognition mistakes, and whatever a PDF's OCR layer missed (a note, a line) stays
+  missing. Fixes for words run together cover English and French only.
+- Vector figures become pictures; password-protected PDFs are rejected.
 
-### Website (planned)
+### Rights of use
 
-A GitHub Pages site is planned at <https://ember169.github.io/pdf_to_epub/>: presentation, the download table,
-screenshots and a FAQ on opening unsigned apps. Its sources will live in `docs/` (which already holds the
-illustrations; the `index.html` page does not exist yet) and be published with the Pages "Deploy from a branch" setting
-(branch `main`, folder `/docs`, the only sub-folder that setting can serve), with no GitHub Actions.
+**The software** is under the [MIT license](LICENSE): you may use, copy, modify and redistribute it, commercially too,
+as long as you keep the copyright and license notice. It comes with no warranty.
 
-### Releases (built locally, no CI)
+**Your documents** stay yours: pdftoepub claims no right over what you convert and sends nothing anywhere. Converting
+does not change the copyright of the content: convert documents you are entitled to use (bought, openly licensed, in the
+public domain, or your own). The EPUBs it produces carry no DRM.
 
-There is no CI: everything is built and tested on a Mac (Docker for Linux, Wine in Docker for Windows), then uploaded.
+**Bundled components.** The apps and the Docker image include third-party software and data, each under its own
+license (the full list is in `THIRD_PARTY_LICENSES`, shipped with every binary):
+- Python (PSF), pdfminer.six (MIT), pypdfium2 and PDFium (Apache-2.0 / BSD-3), Pillow (HPND);
+- Tesseract (Apache-2.0), Leptonica (BSD-2), libpng, and the English and French `tessdata_fast` data (Apache-2.0);
+- the [wordfreq](https://github.com/rspeer/wordfreq) 3.2 word-frequency lists (`large_fr`, `large_en`, unmodified),
+  used to split words that OCR ran together. This **data** is licensed **CC BY-SA 4.0** (wordfreq's code is Apache-2.0):
+  if you redistribute it, keep its attribution (`pdftoepub/core/data/wordfreq/NOTICE.txt`), and share it under the same
+  license if you modify it.
 
-```bash
-packaging/build.sh mac-arm64 mac-x86_64 linux-arm64 linux-x86_64 windows   # all binaries into dist/
-packaging/smoke.sh                       # tests every binary in clean environments, rewrites dist/SHA256SUMS
-packaging/release.sh v0.1.0              # dry run: checks dist/, writes SHA256SUMS, prints the gh command
-packaging/release.sh v0.1.0 --publish    # creates the GitHub release (needs `gh auth login`)
-```
+An optional PDF backend uses [PyMuPDF](https://pymupdf.readthedocs.io/), which is **AGPL-3.0**: an installation that
+includes it (`pip install ".[pymupdf]"`) falls under the AGPL. The apps and the Docker image do not include it.
 
-- macOS needs `uv`, cmake and the Xcode command line tools. Run `packaging/build_tesseract_macos.sh` once first: it
-  builds Tesseract, Leptonica and libpng from pinned, sha256-checked sources for both Mac chips (macOS 11 and newer).
-- The Intel Mac build runs under Rosetta and uses `packaging/macos-x86_64.lock`; Mac builds pin pypdfium2 5.9.0
-  (newer PDFium needs macOS 13). The build fails if any binary needs a newer macOS than 12.0.
-- Linux is built on Debian 11 in Docker and tested in clean `debian:11-slim` and `ubuntu:20.04` containers. Windows is
-  built and tested under Wine, never on real Windows; `packaging/build.ps1` (native Windows build) has never been run.
-- Every dependency is installed from hash-pinned lock files (`requirements.lock`, `packaging/*.lock`;
-  `packaging/relock.sh` regenerates them). The binaries contain no PyMuPDF (the build fails if it is present).
+### Contributing
 
-#### Signing (ready, not used yet)
+Help is welcome: report a problem, suggest an improvement, try it on your documents.
 
-The current builds are ad-hoc signed. The scripts for real signatures are ready and were proven end to end with
-throw-away self-signed certificates; they only need the certificates.
+**Report a problem**: open an [issue](https://github.com/ember169/pdf_to_epub/issues) with your system, the version,
+the command or options you used and what you expected. If you can, attach a PDF that can be shared publicly (public
+domain, openly licensed, or your own document). **Never attach a copyrighted document**: describe the problem instead
+(a screenshot of one page is often enough).
 
-| | What removes the warning | Script |
-|---|---|---|
-| macOS | **Developer ID Application** certificate (Apple Developer Program, 99 USD/year) + notarization | `packaging/sign_macos.sh` (called by `build.sh`; hardened runtime, timestamp, notarize, staple) |
-| Windows | **Authenticode** certificate (OV about 100–300 USD/year; EV or Azure Trusted Signing also possible) | `packaging/sign_windows.sh` (osslsigncode, RFC 3161 timestamp) |
-
-```bash
-xcrun notarytool store-credentials pdftoepub-notary --apple-id you@example.com --team-id TEAMID   # once
-APPLE_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" APPLE_NOTARY_PROFILE=pdftoepub-notary \
-  packaging/build.sh mac-arm64 mac-x86_64
-WIN_SIGN_PFX=~/certs/codesign.pfx WIN_SIGN_PASSWORD=... packaging/sign_windows.sh
-```
-
-Verified with self-signed certificates: macOS `codesign --verify --deep --strict` OK, the signed app and command-line
-tool run, OCR included, with no entitlement exceptions; Windows `osslsigncode verify` OK and the signed `.exe` runs
-under Wine. Notarization needs Apple credentials and is untested.
-
-### Development
+**Contribute code**
 
 ```bash
 python3.12 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
-pdftoepub book.pdf -o book.epub          # command line
-pdftoepub serve                          # web page on port 8000
-pytest                                   # test PDFs are generated on the fly (tests/fixtures/make_fixtures.py)
-docker build -f deploy/Dockerfile --target test -t pdftoepub-test . && docker run --rm pdftoepub-test   # + epubcheck
-python tests/corpus/fetch.py             # real-world corpus (downloads, sha256-checked)
-python tests/corpus/evaluate.py --label mine
+pip install -e ".[dev]"                    # includes PyMuPDF (AGPL) to test both backends
+python -m pdftoepub.core.lexicon fetch     # wordfreq frequency lists (optional, CC BY-SA 4.0)
+pytest -q tests src                        # the whole suite, once per PDF backend
 ```
 
-From a source install, OCR needs `tesseract` and language packs (`brew install tesseract tesseract-lang`,
-`apt install tesseract-ocr-fra`); without it scanned pages are skipped with a warning. epubcheck 5.4.0 is downloaded
-once into `tests/.cache` (sha256-checked; `EPUBCHECK_JAR` to use your own) and its tests are skipped without `java`.
-The suite runs once per PDF backend (`PDFTOEPUB_BACKEND` = `pdfminer`, `pymupdf`).
+- OCR from a source install needs `tesseract` (`brew install tesseract tesseract-lang`,
+  `apt install tesseract-ocr-fra`); the epubcheck tests need `java` (the jar is downloaded and checked once).
+- The tests build their PDFs on the fly (reportlab): add a test for every fix or feature, with a synthetic PDF (never
+  text from a copyrighted book).
+- Every change to the conversion is measured on the real-document corpus, before and after:
+  ```bash
+  python tests/corpus/fetch.py                     # downloads the corpus (public domain / open licenses, sha256)
+  python tests/corpus/evaluate.py --label before   # on the main branch
+  python tests/corpus/evaluate.py --label after    # with your change
+  python tests/corpus/evaluate.py --compare before after
+  ```
+  A change must not make any document worse, and epubcheck must stay at 0 errors. You can add your own books locally,
+  without ever publishing them (`tests/.corpus/private/`, ignored by git).
+- Where things are: the conversion in [`src/pdftoepub/core/`](src/pdftoepub/core/README.md) (every step is described
+  there), the web page and server in [`src/pdftoepub/web/`](src/pdftoepub/web/README.md), the command line in
+  `src/pdftoepub/cli.py`, the public API in `src/pdftoepub/api.py`, the apps in `packaging/` and the Docker server in
+  `deploy/`. Releasing is described in [`RELEASING.md`](RELEASING.md).
 
-### License
-
-MIT (see [`LICENSE`](LICENSE)). Default PDF backend: pdfminer.six (MIT) + pypdfium2 (Apache-2.0/BSD-3). The binaries
-bundle Python (PSF), PDFium, Tesseract (Apache-2.0), Leptonica (BSD-2), libpng and `tessdata_fast` (Apache-2.0);
-their licences are listed in `THIRD_PARTY_LICENSES` (also inside each binary).
-
-An optional backend uses [PyMuPDF](https://pymupdf.readthedocs.io/) (`pip install ".[pymupdf]"`,
-`PDFTOEPUB_BACKEND=pymupdf`). PyMuPDF is **AGPL-3.0**, so an installation that includes it falls under the AGPL. The
-binaries and the Docker image do not include it.
+By contributing, you agree that your contribution is published under the project's MIT license.

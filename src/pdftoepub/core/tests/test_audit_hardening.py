@@ -216,6 +216,29 @@ def test_clean_text_field_and_title_fallbacks(samples, tmp_path):
     assert res.title.strip() and f"<dc:title>{res.title}</dc:title>" in opf and "\x07" not in opf
 
 
+def test_tex_leaking_into_the_info_title_is_not_the_title(samples, tmp_path):
+    from pypdf import PdfReader, PdfWriter
+
+    from pdftoepub.core import structure
+
+    # hyperref fed a macro (an apostrophe) to /Title: the PDF holds TeX code, as each backend unescapes it
+    tex = r"Puck of Pook{\protect \edef U00{U00}\let \enc@update \relax \protect \xdef \U00/times/m/n/10.95 }s Hill"
+    for t in (tex, "Puck of Pook{rotect def U00{U00}et nc@update elax rotect def 00/times/m/n/10.95 }s Hill",
+              "Pook{protect edef U00{U00}let enc@update elax", r"\textbf{Title}", "A \\def B"):
+        assert structure.leaked_markup(t) and structure.clean_meta_title(t) is None, t
+    for t in ("Le Roman expérimental", "The Project Gutenberg eBook #33283: Calculus Made Easy, 2nd Edition",
+              "An island plant : a Nantucket story", "Burrell, David De Forest, 1876-", "LA GÉOMÉTRIE(1)",
+              "C/C++ and Python", "Mail me@example.com", "Undefined behaviour"):
+        assert not structure.leaked_markup(t) and structure.clean_meta_title(t) == t, t
+    w = PdfWriter(clone_from=PdfReader(str(samples / "book.pdf")))
+    w.add_metadata({"/Title": tex, "/Author": r"\author{Jane}"})
+    w.write(str(tmp_path / "tex.pdf"))
+    res = convert(tmp_path / "tex.pdf", tmp_path / "t.epub")
+    z = zipfile.ZipFile(tmp_path / "t.epub")
+    text = "".join(z.read(n).decode() for n in z.namelist() if n.endswith((".opf", ".xhtml", ".ncx")))
+    assert res.title == "Sample Book" and not any(s in text for s in ("U00", "@update", "/times/", r"\author", "{Jane}"))
+
+
 @pytest.mark.parametrize("href,expected", [
     ("https://proceedings.neurips.cc/paper/92d1e1eb fb.pdf", "https://proceedings.neurips.cc/paper/92d1e1eb%20fb.pdf"),
     (" https://ex.com/a b?q=é#f g ", "https://ex.com/a%20b?q=%C3%A9#f%20g"),
