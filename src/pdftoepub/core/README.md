@@ -95,7 +95,15 @@ tests/        pytest suite, run once per backend: `pytest src/pdftoepub/core/tes
    pdfminer's gap-based spaces would split letter-spaced small type into "B e r n a r d"). Conservative OCR
    corrections (`ocrfix.py`, OCR'd books only): fixed patterns ("lbid", "Tbe", "xixᶜ siècle", spaced or misread digits in
    years / page numbers) and words whose `î`/`ï`/`i` or `rn`/`m` variant, or camel-case split ("ofCalifornia"), occurs
-   ≥3 times in the book while the original occurs at most once.
+   ≥3 times in the book while the original occurs at most once. Pages count as OCR'd when they are OCR'd here, carry a
+   known OCR layer, or are a full-page scan with text (ABBYY layers use ordinary font names).
+   Glued lower-case words (`glue.py`, OCR'd French / English books, after the language is detected): "danslavie" →
+   "dans la vie" with the wordfreq 3.2 frequency lists (`lexicon.py`; `python -m pdftoepub.core.lexicon fetch`, CC BY-SA
+   4.0 data, unmodified). A token is split only if it is all lower case (≥ 5 letters, no digit / apostrophe / hyphen /
+   address), occurs once in the book, is not a common word of either language, is not one letter away from a common word
+   (a misread: "auleurs"), and splits into 2–3 common words whose summed log-frequency beats the token's by 1.5; short
+   parts must be function words, and a prefix-like first word ("in", "en", "anti") needs a very common word after it.
+   Without the lists nothing changes.
 3. **Header/footer removal** (`layout.remove_running`). Lines/images in the top/bottom 15 % of the page whose normalised text
    (digits → `#`, spaces removed) recurs on a chain of ≥3 pages (gaps ≤2, so alternating verso/recto heads work) at about the same height
    and are not larger than 1.2× body size. Chapter-opening lines are kept (never on neighbouring pages / larger). Isolated page numbers in the

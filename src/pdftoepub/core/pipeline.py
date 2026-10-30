@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 
 from ..api import ConversionError, ConvertOptions, ConvertResult, ProgressCb, ProgressEvent
-from . import endnotes, formulas, frontmatter, layout, ocr, ocrfix, openings, printedtoc, structure
+from . import endnotes, formulas, frontmatter, glue, layout, ocr, ocrfix, openings, printedtoc, structure
 from .backends import get_backend
 from .backends.common import ImageStore, cover_from_pil, limit_pillow, page_text_quality
 from .epub import write_epub
@@ -151,6 +151,7 @@ def _extract_all(doc, options: ConvertOptions, progress, warnings: list[str], st
             warnings.append(f"Page {pno} could not be read ({type(exc).__name__}) and was skipped.")
         nchars, garbage = page_text_quality(pd.lines, pd.bad_chars)
         scan = any(im.kind == "scan" for im in pd.images)
+        pd.scanned = scan
         needs_ocr = False
         textless = garbage or (nchars < 20 and (scan or (pd.has_graphics and not pd.images)))
         if options.ocr == "force":
@@ -343,7 +344,9 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
         blocks, entries = printedtoc.apply(blocks, printed_toc, toc_pages, offset, n)
         toc = structure.clean_toc([(lv, t, p, max(y, 0.0)) for lv, t, p, y in entries], n)
         split_level = max(e.level for e in printed_toc)
-    if sum(p.source == "ocr" or p.ocr_layer for p in pages) >= 0.5 * len(pages):
+    # OCR'd text: OCR here, a known OCR layer, or text over full-page scans (ABBYY layers use ordinary font names)
+    ocr_book = sum(p.source == "ocr" or p.ocr_layer or p.scanned for p in pages) >= 0.5 * len(pages)
+    if ocr_book:
         ocrfix.correct(blocks)
     if not blocks:
         raise ConversionError("No readable text was found in this PDF.")
@@ -358,6 +361,8 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
     creators = [] if author else [(n, "edt") for n in (structure.clean_text_field(e) for e in printed.editors) if n]
     sample = " ".join(structure.plain(b.runs) for b in blocks if isinstance(b, Paragraph))[:30000]
     lang = options.language if options.language and _LANG_OK.match(options.language) else structure.detect_language(sample)
+    if ocr_book:  # words the OCR ran together ("danslavie"), with the language's frequency lexicon
+        glue.split_glued(blocks, lang)
 
     chapters = structure.build_chapters(blocks, toc, n, title, warnings, split_level)
     for ch in chapters:  # a reference and its endnote in the same document

@@ -579,6 +579,7 @@ def worker(pdf: str, epub: str, ocr: str, langs: str) -> None:
     import pdftoepub
 
     crops = probe_crops()
+    glued = probe_glue()
     t0 = time.perf_counter()
     try:
         res = pdftoepub.convert(pdf, epub, pdftoepub.api.ConvertOptions(ocr=ocr, ocr_langs=langs))
@@ -588,7 +589,29 @@ def worker(pdf: str, epub: str, ocr: str, langs: str) -> None:
     out["seconds"] = time.perf_counter() - t0
     if crops is not None:
         Path(epub + ".crops.json").write_text(json.dumps(crops))
+    if glued is not None:
+        Path(epub + ".glue.json").write_text(json.dumps(glued, ensure_ascii=False))
     print("RESULT " + json.dumps(out))
+
+
+def probe_glue() -> list | None:
+    """Record the glued-word splits (`core.glue`) of the conversion: [(token, replacement)]."""
+    try:
+        from pdftoepub.core import glue
+    except ImportError:  # a checkout without it
+        return None
+    seen: list = []
+    orig = glue.split_glued
+
+    def probe(blocks, lang):
+        changes = orig(blocks, lang)
+        seen.extend(changes)
+        return changes
+
+    glue.split_glued = probe
+    from pdftoepub.core import pipeline
+    pipeline.glue = glue
+    return seen
 
 
 def probe_crops() -> list | None:
@@ -714,7 +737,7 @@ def run_worker(doc: dict, pdf: Path, epub: Path, backend: str, timeout: int, src
 HEAD = ["doc", "backend", "pages", "word_recall", "word_precision", "char_recall", "pre_share", "pua", "order", "order_2col", "mid_breaks",
         "hyph_left", "hyph_joined", "hdr_leak", "pnum_leak", "outline", "nav", "chapters", "headings", "outline_match",
         "headings_per_page", "chapters_per_100p", "gt_chapters", "ch_found", "sec_found", "ch_spurious", "img_pdf", "img_epub",
-        "formula_imgs", "crops", "crop_bleed", "crop_clip", "sub_sup", "lspaced", "glued", "split_words", "joined_words", "noterefs", "sup_unlinked",
+        "formula_imgs", "crops", "crop_bleed", "crop_clip", "sub_sup", "lspaced", "glued", "split_words", "joined_words", "glue_splits", "noterefs", "sup_unlinked",
         "note_items", "junk_imgs", "lower_starts", "pagelist", "gt_units", "spine_units", "spine_docs", "nav_recall",
         "nav_precision", "title_ok", "nav_garbled", "nav_unsupported", "epubcheck", "s_per_page", "rss_mb"]
 
@@ -765,6 +788,8 @@ def write_report(label: str, rows: list[dict]) -> Path:
         md.append(f"- extra (most frequent): {', '.join(r.get('extra_top', []))}")
         if r.get("mid_break_examples"):
             md.append("- mid-sentence breaks: " + " | ".join(r["mid_break_examples"]))
+        if r.get("glue_examples"):
+            md.append(f"- glued words split ({r.get('glue_splits')}): " + " | ".join(r["glue_examples"]))
         if r.get("hdr_leak_examples"):
             md.append("- header leaks: " + " | ".join(r["hdr_leak_examples"]))
     (d / "report.md").write_text("\n".join(md) + "\n")
@@ -860,6 +885,11 @@ def main(argv: list[str] | None = None) -> int:
                     gt = json.loads((CORPUS / doc["gt_file"]).read_text())
                 row.update(metrics(ref, read_epub(epub), gt))
                 row.update(crop_check(pdf, epub))
+                side = Path(str(epub) + ".glue.json")
+                if side.exists():
+                    changes = json.loads(side.read_text())
+                    row["glue_splits"] = len(changes)
+                    row["glue_examples"] = [f"{a} → {b}" for a, b in changes[:: max(1, len(changes) // 30)][:30]]
                 row["epubcheck"] = old.get("epubcheck", -1) if args.rescore else epubcheck(epub, args.epubcheck)
                 row["s_per_page"] = res["seconds"] / max(1, res["pages"])
                 print(f"ok {res['seconds']:.1f}s rss={res['rss_mb']}MB recall={row['word_recall']:.3f} order={fmt(row['order'])} "

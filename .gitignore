@@ -9,3 +9,6 @@ tests/corpus/out/
 build/
 tests/.cache/
 packaging/tessdata/*.traineddata
+
+# wordfreq lexicons fetched by `python -m pdftoepub.core.lexicon fetch` (CC BY-SA 4.0 data, see NOTICE.txt there)
+src/pdftoepub/core/data/

@@ -59,6 +59,141 @@ Caveats: on the math books (Calculus, Galois, Descartes) numbers inside formulas
 display formulas count as "breaks". The French OCR excerpt is compared against another OCR engine (IA's), which is not
 ground truth.
 
+## Round 6: glued lower-case words in OCR'd books
+
+Before is d563fe1 (`r6-before`) and after is this tree (`r6-after`). Each was run on all 19 documents with both backends
+and epubcheck on. The test suite: 439 passed, 2 skipped. epubcheck: 0 errors everywhere.
+
+### Licences: what was checked, and the choice
+
+| source | what | licence, from the primary source | verdict |
+|---|---|---|---|
+| **wordfreq 3.2** (rspeer/wordfreq, tag v3.2, commit 42233e6) | word frequencies, 40+ languages, `large_fr` / `large_en` ≈ 1.5 MB each | code Apache-2.0 (LICENSE.txt, "Copyright 2022 Robyn Speer"); data files "may be redistributed under a Creative Commons Attribution-ShareAlike 4.0 license" (README, "License"); attribution required to Google Books Ngrams, OpenSubtitles, SUBTLEX (README) | **chosen** |
+| Open Lexicon / Lexique 3.83 (chrplr/openlexicon) | French word forms with frequencies | CC BY-SA 4.0 (repository LICENSE.txt and README) | usable, French only, larger |
+| French Hunspell dictionaries (Dicollecte / Grammalecte) | spelling dictionary, no frequencies | Mozilla Public License 2.0 (LibreOffice extensions page) | usable for membership only; affix expansion needed |
+| SCOWL / en_US Hunspell (en-wl/wordlist) | English word lists, no frequencies | permissive, notice required; some parts (UKACD, WordNet) carry their own notice terms (`scowl/Copyright`) | usable, English only, no frequencies |
+| FrequencyWords (hermitdave) | OpenSubtitles frequency lists | MIT for code, CC BY-SA 4.0 for content (LICENSE, README) | usable, subtitles only |
+
+**The choice:** wordfreq. It is one source for both languages, with frequencies from books, subtitles, Wikipedia and the
+web. Its terms suit an MIT project: code under Apache-2.0, data under CC BY-SA 4.0. No GPL, AGPL, NonCommercial or
+NoDerivatives term applies. Share-alike covers only the data files, which ship as separate files under their own licence.
+
+**How the files are shipped and read:**
+* The author asks that the data not be converted to formats that drop the attribution (README: "Can I convert wordfreq to
+  … a CSV file? No."). So the two files ship **unmodified**, next to wordfreq's `LICENSE.txt` and a `NOTICE.txt` holding
+  the licence and every attribution the README requires.
+* They are read by a 60-line MessagePack reader in `core/lexicon.py`, so no new Python dependency is added.
+* `python -m pdftoepub.core.lexicon fetch` downloads them from the pinned commit into `src/pdftoepub/core/data/wordfreq/`
+  and checks their sha256:
+  * `large_fr.msgpack.gz` `6f16cd80…c00c8b`;
+  * `large_en.msgpack.gz` `dffae806…28b05c`;
+  * `LICENSE.txt` `8990c551…aa88`.
+* That folder is git-ignored. I don't commit them, because they are 3 MB of binary data that never changes and that a
+  pinned, hash-checked fetch reproduces exactly.
+
+**Without the files:** the repair does nothing; nothing else depends on them.
+
+**Packaging, not done by me (`packaging/`):**
+* **Build:** `build.sh`, `build.ps1` and `Dockerfile.linux` should run `python -m pdftoepub.core.lexicon fetch` before
+  PyInstaller. `collect_data_files("pdftoepub")` in the spec already takes `core/data/wordfreq/`, and the lookup also
+  works from `_MEIPASS`.
+* **Licences:** add to `gen_licenses.py` `FIXED`:
+  ```
+  == wordfreq 3.2 word-frequency data (large_fr, large_en; pdftoepub/core/data/wordfreq, unmodified) ==
+  Data: CC BY-SA 4.0 - https://creativecommons.org/licenses/by-sa/4.0/ ; code: Apache-2.0 - https://github.com/rspeer/wordfreq/blob/v3.2/LICENSE.txt
+  By Robyn Speer, https://github.com/rspeer/wordfreq (commit 42233e6). Contains data from Google Books Ngrams (http://books.google.com/ngrams), OPUS OpenSubtitles 2018 (attribution to OpenSubtitles, http://www.opensubtitles.org/), SUBTLEX by Marc Brysbaert et al. (freely available data), Wikipedia, the Leeds Internet Corpus and ParaCrawl. Full notice: pdftoepub/core/data/wordfreq/NOTICE.txt
+  ```
+
+**Cost in the binaries and at run time:**
+* +2.99 MB of data, shipped as published (already compressed).
+* At run time, only for OCR'd French or English books: 0.2 s to load and about +60 MB peak memory (the French table, plus
+  the other language's common words, which is 29k entries).
+
+### Algorithm → `core/glue.py`
+
+It runs only on OCR'd text, never born-digital (see the gate below). The language is the book's detected `dc:language`;
+it applies to French and English, and does nothing otherwise.
+
+A token is split only when all of these hold:
+* it is all lower case, 5–40 letters, with no digit, apostrophe or hyphen, and not part of a URL or e-mail;
+* it occurs once in the book;
+* it is not a common word (Zipf < 3.5; the lists also hold frequent typos such as "dela"), nor a common word of the other
+  language (Zipf ≥ 3: "differently abled");
+* it is not one letter away from a common word. That is an OCR misread: "auleurs" is "auteurs", not "au leurs", and
+  likewise "planle", "suile", "porle", "faisail";
+* its best split into 2–3 words beats the token's own log-frequency by 1.5 (log10), with these limits on the parts:
+  * every part is common (Zipf ≥ 3; three-letter parts ≥ 4, so not an abbreviation like "sci");
+  * one- and two-letter parts are function words (Zipf ≥ 5.5: "la", "de", "of"; not "es", "ci");
+  * a one-letter word sits beside a function word ("il a", "à la"; not "drap a");
+  * after a prefix-like word ("in", "all", "en", "sur", "anti") only a very common word may follow (Zipf ≥ 6: "in the";
+    not "in dwellers", "anti es").
+
+Each rule above comes from a wrong split seen on the corpus. The changes are counted, and a sample goes to each
+document's evaluation report (`glue_splits`, `glue_examples`; the evaluator's worker records them).
+
+**OCR gate, a correction to round 5.** The OCR'd-book test was "OCR here or a known OCR-layer font", and it missed ABBYY
+layers, which use ordinary font names. So round 5's OCR corrections (`ocrfix.py`) never ran on the private book. The 91
+changes I reported came from running `ocrfix` on cached blocks, not from the conversion. Pages are now also counted as
+OCR'd when they are a full-page scan with text (`PageData.scanned`). Both repairs now run on the book's real output.
+
+### Results
+
+| document | splits (pdfminer / PyMuPDF) | hand-checked (pdfminer) |
+|---|---|---|
+| Zola (fr) | 64 / 67 | all 64: 61 right, 1 probably wrong ("nousa" → "nous a"), 2 unclear (the corrected phrase also occurs elsewhere) |
+| Island (en) | 2 / 2 | 2 right |
+| Innkeeper (en) | 1 / 1 | 1 right |
+| scan-only-en / -fr | 1 / 1 each | right |
+| private book (fr) | 5 / 5 | 5 right |
+| born-digital documents | 0 | – |
+
+Precision of the splitter, all 74 pdfminer changes checked by hand: **at least 71 / 74 (96 %), 73 / 74 if the 2 unclear
+ones are right.**
+
+Rules added on the way, and what they cost:
+* An earlier version made 88 changes on Zola with about 17 wrong (OCR misreads and hyphen fragments split into words).
+  The misread rule and the short-part rules removed those.
+* They also cost about 10 right splits, such as "quele" (also one letter from "quelle") and "letour" (one letter from
+  "retour"). Precision was preferred.
+* The private book has few lower-case glued words, 5 found. The round-5 "danslavie" and "socialprovisioning" were the
+  examples; the second mixes French and English, and is left.
+
+**Metrics against the reference text, and why they move.** The corpus reference is the PDF's own text layer. For these
+scans it holds the very glue being repaired: 61 of Zola's 64 split tokens are single words in it. So a correct split
+counts as a "split word" and lowers word precision against that reference.
+
+Raw metrics, before → after (pdfminer; PyMuPDF the same within 0.0005):
+
+| document | word precision | split words /10k | joined words /10k |
+|---|---|---|---|
+| Zola | 0.9918 → 0.9911 | 0.45 → 1.87 | 17.67 → 17.40 |
+| Island | 0.9994 → 0.9992 | 1.26 → 1.89 | 0 → 0 |
+| Innkeeper | 0.9987 → 0.9982 | 0 → 0 | 2.63 → 2.63 |
+| scan-only-en | 0.9907 → 0.9903 | 4.41 → 4.41 | 4.41 → 4.41 |
+| scan-only-fr | 0.9468 → 0.9479 | 30.67 → 30.64 | 71.57 → 61.29 |
+
+Scored against a reference with the same glue split (only whole-word occurrences of the 64 / 2 tokens, nothing else
+touched):
+
+| document | precision | split words | recall | order |
+|---|---|---|---|---|
+| Zola, before → after | 0.9913 → 0.9918 | 0.45 → 0.45 | 0.9710 → 0.9720 | 0.9314 → 0.9348 |
+| Island, before → after | 0.9992 → 0.9994 | 1.26 → 1.26 | 0.9801 → 0.9804 | 0.9760 → 0.9768 |
+
+Innkeeper's −0.0005 is its one change ("theshepherds" → "the shepherds", glued in the reference). On the 13 born-digital
+public documents every metric is identical. On the private book, `order_2col` goes 0.890 → 0.885: the OCR corrections now
+run there, and the reference keeps the misreads they fix.
+
+**Tests** (`core/tests/test_glue.py`, with a synthetic lexicon in wordfreq's format):
+* the format is read;
+* glued words are split, while real, repeated, capitalised, digit, address, one-letter-misplaced, typo-list and
+  other-language words are left alone;
+* without the lexicon there is no change;
+* an OCR layer over a scan is repaired, and the same text born-digital is not.
+
+**Not done:** languages other than French and English; glued words with a capital or an apostrophe; splits into more than
+3 words; glued words that the book repeats; and misread glue ("toutle" one letter from "toute").
+
 ## Round 5: a real scanned book (collective volume, ABBYY OCR layer)
 
 The test case is a 420-page French collective volume, scanned with an invisible ABBYY FineReader 10 text layer. It is
