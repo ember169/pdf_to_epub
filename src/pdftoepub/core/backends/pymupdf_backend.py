@@ -14,7 +14,7 @@ from ..tables import detect_text_tables
 from .base import PdfBackend, PdfDocument
 from .common import (MAX_DECODE_PIXELS, ImageStore, asset_from_pil, cell_text, clamp_scale, clean_text, encode_image,
                      figures_from_clusters, fix_spacing_accents, is_ocr_font, map_pua, merge_row_fragments,
-                     style_from_name, table_from_rows)
+                     is_math_font, style_from_name, table_from_rows)
 
 pymupdf.TOOLS.mupdf_display_errors(False)
 
@@ -150,7 +150,10 @@ class PyMuPDFDocument(PdfDocument):
                     oy = s["origin"][1]
                     sup = small and oy <= base_y - 0.12 * maxsize
                     sub = small and not sup and oy >= base_y + 0.12 * maxsize
-                    if not all_flagged_sup and (s["flags"] & 1) and s["text"].strip() and len(visible) > 1:
+                    # MuPDF's superscript flag: trusted for markers ("12", "*"), not for a run of text or a full-size
+                    # operator that merely sits on another baseline of a multi-row "line" (formulas)
+                    if (not all_flagged_sup and (s["flags"] & 1) and 0 < len(s["text"].strip()) <= 3
+                            and len(visible) > 1 and (s["size"] < 0.95 * maxsize or s["text"].strip().isdigit())):
                         sup = True
                     if not s["text"].strip():
                         bold = italic = sup = sub = False
@@ -165,7 +168,8 @@ class PyMuPDFDocument(PdfDocument):
                     self._all_chars += len(text)
                     if is_ocr_font(s["font"]):
                         self._ocr_chars += len(text)
-                    spans.append(Span(text, float(s["size"]), bold, italic, sup, sub, mono, tuple(s["bbox"]), link))
+                    spans.append(Span(text, float(s["size"]), bold, italic, sup, sub, mono, tuple(s["bbox"]), link,
+                                      is_math_font(s["font"]) and bool(s["text"].strip())))
                 lines.append(Line(spans, tuple(ln["bbox"]), pno))
         ocr_layer = self._ocr_chars > 0.5 * max(1, self._all_chars)
         return merge_row_fragments(lines, 2.0 if ocr_layer else 0.45)
@@ -263,15 +267,19 @@ class PyMuPDFDocument(PdfDocument):
         return img, info.get("ext", "").lower() in ("jpeg", "jpg", "jpx")
 
     @staticmethod
-    def _render_region(page, rect, dpi: int = 200):
+    def _render_region(page, rect, dpi: int = 200, gray: bool = False):
         from PIL import Image
 
         rect = rect & page.rect
         if rect.is_empty or rect.width < 4 or rect.height < 4:
             return None
         scale, _ = clamp_scale(rect.width, rect.height, dpi)
-        pix = page.get_pixmap(clip=rect, matrix=pymupdf.Matrix(scale, scale), alpha=False)
-        return asset_from_pil(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+        pix = page.get_pixmap(clip=rect, matrix=pymupdf.Matrix(scale, scale), alpha=False,
+                              colorspace=pymupdf.csGRAY if gray else pymupdf.csRGB)
+        return asset_from_pil(Image.frombytes("L" if gray else "RGB", (pix.width, pix.height), pix.samples))
+
+    def render_region(self, pno: int, rect, dpi: int = 200, gray: bool = False):
+        return self._render_region(self.doc[pno - 1], pymupdf.Rect(rect), dpi, gray)
 
     def _figures(self, page, pno: int, pd: PageData, store: ImageStore):
         try:

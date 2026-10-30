@@ -13,6 +13,7 @@
 <div class="wrap">
   <header>
     <div class="topbar">
+      <button type="button" id="quit" class="btn" hidden data-i18n="quit"></button>
       <label class="lang"><span class="sr" data-i18n="language"></span>
         <select id="lang"></select></label>
     </div>
@@ -108,6 +109,20 @@
     <p id="pv-msg" class="hint" role="status"></p>
   </div>
 </div>
+<div id="quit-dlg" class="overlay" hidden>
+  <div class="pv-box quit-box" role="alertdialog" aria-modal="true" aria-labelledby="quit-title" aria-describedby="quit-text">
+    <h2 id="quit-title" data-i18n="quitTitle"></h2>
+    <p id="quit-text"></p>
+    <div class="row">
+      <button type="button" id="quit-no" class="btn" data-i18n="cancel"></button>
+      <button type="button" id="quit-yes" class="btn primary" data-i18n="quitYes"></button>
+    </div>
+  </div>
+</div>
+<main id="stopped" class="wrap" hidden tabindex="-1">
+  <h1 id="stopped-title"></h1>
+  <p class="lead" id="stopped-text"></p>
+</main>
 <script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>

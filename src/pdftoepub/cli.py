@@ -59,24 +59,113 @@ def _default_data_dir() -> str:
     return str(base / "pdftoepub")
 
 
-def run_server(host: str, port: int, *, open_browser: bool = False, reload: bool = False) -> int:
+def _say(msg: str) -> None:
+    """Console (when there is one) and, in desktop mode, desktop.log through the logging handlers."""
+    import logging
+
+    if sys.stdout is not None:
+        try:
+            print(msg, flush=True)
+        except (OSError, ValueError):
+            pass
+    logging.getLogger("pdftoepub").info(msg.replace("\n", " | "))
+
+
+def _setup_desktop_logging(data_dir: Path) -> None:
+    """A .app has no visible stdout/stderr: keep a small rotating log (1 MB x 3) next to the data."""
+    import logging
+    import logging.handlers
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(data_dir / "desktop.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    for name in ("pdftoepub", "uvicorn", "uvicorn.error", "uvicorn.access"):
+        lg = logging.getLogger(name)
+        lg.addHandler(handler)
+        lg.setLevel(logging.INFO)
+    prev = sys.excepthook
+
+    def hook(et, ev, tb):
+        logging.getLogger("pdftoepub").critical("uncaught exception", exc_info=(et, ev, tb))
+        prev(et, ev, tb)
+
+    sys.excepthook = hook
+
+
+def _instance_file(data_dir: Path) -> Path:
+    return data_dir / "desktop.json"
+
+
+def _running_instance(data_dir: Path) -> str | None:
+    """URL of an already running desktop instance of ours (desktop.json + a healthz that identifies pdftoepub)."""
+    import json
+    import urllib.request
+
+    try:
+        port = int(json.loads(_instance_file(data_dir).read_text())["port"])
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1.5) as r:
+            if json.loads(r.read()).get("app") == "pdftoepub":
+                return f"http://127.0.0.1:{port}"
+    except Exception:
+        pass
+    return None
+
+
+def _write_instance(data_dir: Path, port: int) -> None:
+    import json
+    import os
+
+    f = _instance_file(data_dir)
+    tmp = f.with_name(f"desktop.json.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"port": port, "pid": os.getpid()}, fh)
+    os.replace(tmp, f)
+
+
+def _remove_instance(data_dir: Path) -> None:
+    import json
+    import os
+
+    f = _instance_file(data_dir)
+    try:
+        if json.loads(f.read_text()).get("pid") == os.getpid():
+            f.unlink()
+    except Exception:
+        pass
+
+
+def run_server(host: str, port: int, *, open_browser: bool = False, reload: bool = False, desktop: bool = False) -> int:
+    import dataclasses
+    import os
+    import signal
     import threading
     import webbrowser
 
     import uvicorn
 
     if host not in LOOPBACK:
-        import os
-
         print("WARNING: listening on a non-loopback address; anyone who can reach it can use this server. "
               "Set AUTH_TOKEN to require a bearer token."
               + ("" if os.environ.get("AUTH_TOKEN") else " (AUTH_TOKEN is not set!)"), file=sys.stderr)
     if reload:
         uvicorn.run("pdftoepub.web.app:app", host=host, port=port, reload=True)
         return 0
-    from .web.app import app
+    data_dir = None
+    if desktop:
+        from .web.app import create_app
+        from .web.config import Settings
 
-    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+        settings = dataclasses.replace(Settings.from_env(), desktop=True)
+        data_dir = settings.data_dir
+        _setup_desktop_logging(data_dir)
+        app = create_app(settings)
+    else:
+        from .web.app import app
+
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info" if desktop else "warning"))
+    if desktop:
+        app.state.request_exit = lambda: setattr(server, "should_exit", True)
     shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
     url = f"http://{shown}:{port}"
     if open_browser:
@@ -90,12 +179,27 @@ def run_server(host: str, port: int, *, open_browser: bool = False, reload: bool
                     pass
 
         threading.Thread(target=opener, daemon=True).start()
-    print(f"pdftoepub tourne sur {url} - fermez cette fen\u00eatre (ou Ctrl+C) pour quitter\n"
-          f"pdftoepub is running at {url} - close this window (or press Ctrl+C) to quit", flush=True)
+    _say(f"pdftoepub tourne sur {url} - fermez cette fen\u00eatre (ou Ctrl+C) pour quitter\n"
+         f"pdftoepub is running at {url} - close this window (or press Ctrl+C) to quit")
+    if desktop:
+        def stop(*_: object) -> None:  # keep uvicorn's graceful shutdown (and our cleanup) in charge of SIGTERM/SIGHUP
+            server.should_exit = True
+
+        for name in ("SIGTERM", "SIGHUP"):
+            if hasattr(signal, name):
+                try:
+                    signal.signal(getattr(signal, name), stop)
+                except ValueError:  # not the main thread
+                    pass
+        _write_instance(data_dir, port)
     try:
         server.run()
     except KeyboardInterrupt:
         pass
+    finally:
+        if desktop:
+            _remove_instance(data_dir)
+            _say("pdftoepub arr\u00eat\u00e9 / pdftoepub stopped")
     return 0
 
 
@@ -120,7 +224,15 @@ def _launch_ui() -> int:
     os.environ.setdefault("DATA_DIR", _default_data_dir())
     host = "127.0.0.1"
     try:
-        return run_server(host, _free_port(host), open_browser=True)
+        data_dir = Path(os.environ["DATA_DIR"])
+        existing = _running_instance(data_dir)
+        if existing:  # single instance: just bring the user back to it
+            import webbrowser
+
+            print(f"pdftoepub est d\u00e9j\u00e0 lanc\u00e9 : {existing}\npdftoepub is already running: {existing}")
+            webbrowser.open(existing)
+            return 0
+        return run_server(host, _free_port(host), open_browser=True, desktop=True)
     except BaseException as e:  # keep the console open so the user can read what went wrong
         if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise

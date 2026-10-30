@@ -63,6 +63,23 @@ tests/        pytest suite, run once per backend: `pytest src/pdftoepub/core/tes
    shaded or framed text boxes (≤6 shapes, one covering the whole cluster: code listings, callouts), which stay text.
    Full-page images on pages that have a text layer (searchable scans) are ignored. Ruled tables come from
    `find_tables(use_layout=False)` (PyMuPDF) or from rule segments (pdfminer); cell text is rebuilt from our own spans.
+   **Formulas** (`formulas.py`, born-digital pages, right after extraction). Spans set in a math font (CMMI/CMSY/CMEX,
+   AMS, Euler, STIX/Cambria/Latin Modern Math, MathJax, Symbol, …) are flagged `Span.math`. A row cut by inline math is
+   rejoined; a numerator and a denominator aligned with each other around a text line's middle become `a/b` in that line
+   (parenthesised when compound; also when the PDF library already put them in the line as super/subscripts); a lone small
+   fragment above/below becomes a superscript/subscript; operators are placed by rule, since math-font metrics give them
+   boxes a row too low. The remaining fragments are grouped into vertical clusters between text lines, one per displayed
+   equation (rows holding a relation sign); a cluster with math evidence (math font, operators, Greek, scripts, stacking) is
+   a display formula: one row → a `dmath` text line; stacked / radical / big operator → a 200 dpi grey-scale crop
+   (`ImageItem` kind `formula`, PNG ≤1600 px) whose alt text is the linearised formula. The crop may reach halfway to the
+   neighbouring lines (never into their boxes, at most 1 em past the formula's glyph boxes); within that it starts at the
+   glyph boxes and grows while a border row/column still has ink (CMEX delimiters and radicals reach past their metric
+   boxes), plus a quarter em of white. A cluster beside which a text line continues the row is inline math, not a
+   display formula. The equation number `(12)` stays
+   text, and a connecting word beside it ("or") is kept before it. A column of values beside row labels is a table, not a
+   formula. `structure.inline_display_math` puts each display formula inside the paragraph that introduces it
+   (`<span class="dmath">`, centred block; `<img class="formula" style="width:…em">` scales with the reader's font) and
+   continues that paragraph with the next one unless it is indented or a new sentence. No MathML.
 2. **OCR** (`ocr.py`, `pipeline._extract_all`). Per page: `ocr="force"` → always; `"auto"` → page with <20 text chars and a
    scan-like image (or a garbage text layer: U+FFFD / private-use ratio, low alphabetic ratio); `"off"` → never.
    Missing tesseract or language data → warning, scanned pages kept as images. Languages are validated against
@@ -80,7 +97,12 @@ tests/        pytest suite, run once per backend: `pytest src/pdftoepub/core/tes
    `<a epub:type="noteref">` + `<aside epub:type="footnote">` in a `<section epub:type="footnotes">` at the end of the chapter.
 5. **Reading order** (`layout.xycut`). Recursive XY-cut: vertical cuts on x-gaps ≥ max(7 pt, 0.6×body) (both sides need ≥2
    items; narrow numeric columns like TOC page numbers are not columns), else horizontal cuts at gaps ≥0.3×line height. Items include
-   lines, images, figures and tables, so spanning titles and figures stay in place. `detect_columns=False` disables vertical cuts.
+   lines, images, figures and tables, so spanning titles and figures stay in place. A gap with running text on both sides
+   (≥3 lines of ≥25 characters each side) is cut first, as the column gutter, before any gap between table cells inside a
+   column. Horizontal cuts between two bands without a full-width element (title, author block, wide figure/table, caption)
+   are undone when the merged band has such a gutter, so two-column text is split into columns as a whole between
+   full-width elements (not row by row, which glued a left-column line to a right-column table row).
+   `detect_columns=False` disables vertical cuts.
 6. **Paragraphs** (`layout.split_flow`). The typical leading is measured between a line and the next line below it in the same
    column. Lines are joined into one visual row only when they are side by side (disjoint in x).
    A new paragraph starts on: size/bold/mono change, vertical gap > typical leading+0.28 em,
@@ -103,7 +125,17 @@ tests/        pytest suite, run once per backend: `pytest src/pdftoepub/core/tes
 9. **Chapters**. PDF outline when present: split at the first level with ≥2 entries (one level deeper if that still averages ≥4 pages
    per chapter); each entry is located by matching a heading block of that page by title, else by destination y, else page start. Deeper
    entries become nav sub-sections. Without outline: split at the smallest heading level occurring ≥2 times, never on OCR-derived headings unless they are
-   strong (≥1.5× body, centred, ≤60 chars). Content before the first
+   strong (≥1.5× body, centred, ≤60 chars).
+   **Scanned books** (`openings.py`; no outline and ≥8 pages, mostly OCR): chapters come from the page layout — an opening
+   page starts lower than usual (≥3 % of the page height below the median text top), with short centred capitalised lines
+   above a paragraph; labels (`CHAPTER IV`, `Chapitre premier`, `LIVRE II`, `II.`) and size add evidence; a half-title page
+   with the same title (fuzzy) before it marks a chapter and is dropped; the book title or a book-wide running head repeated
+   above the chapter number is skipped; a roman numeral misread by OCR is repaired from its neighbours (I., II., `BE:` →
+   III.). A printed table of contents (lines ending in page numbers, or headed TABLE / CONTENTS) is matched fuzzily; the
+   printed→PDF page offset voted by ≥2 matches confirms openings and finds the ones the layout missed. Openings count only
+   if there are ≥3 (or ≥2 confirmed by the TOC). Openings after a half-title (or ≥1.3× body when others are ≤1.15×) are
+   chapters and the others level-2 sections when both kinds exist; roman numerals alone on a centred line mid-page are
+   numbered parts. Other OCR headings then never split chapters. Content before the first
    chapter becomes a front-matter chapter titled with the book title. Very long chapters (>400 k chars) are split. Inside a chapter the
    title is `h1` and the other heading ranks are re-mapped to h2–h4.
 10. **Links**. External `http(s)/mailto/ftp` kept (invalid URL characters percent-encoded); internal GoTo links are resolved to the nearest block on the target page
@@ -121,7 +153,14 @@ not thread-safe; analysis and packaging run outside it.
 
 ## Known limits
 
-* No real table-of-contents page reconstruction (printed TOC pages stay as paragraphs with `…` leaders).
+* No real table-of-contents page reconstruction (printed TOC pages stay as paragraphs with `…` leaders; on scans they are
+  only used to find chapters).
+* Mathematics: no MathML. Two-dimensional display formulas are pictures (alt text = linearised formula; glyphs whose
+  ToUnicode maps are wrong, e.g. a CMEX radical read as "r", show up in the alt text); stacked inline fractions become
+  `a/b`; matrices, multi-line aligned equations and inline formulas that are not fractions or scripts stay flat text.
+* Scanned books: chapters need a page-opening layout (sink + centred title) repeated ≥3 times, or ≥2 of them confirmed by a
+  printed TOC (which also finds a missed opening at the top of its page); a chapter starting mid-page is not split off (a
+  roman numeral alone on its line becomes a part heading). Titles keep their OCR misreads ("DI^] LA CRITIQUE").
 * Borderless tables and nested lists are best effort; multi-line table cells in borderless tables end the table.
 * Footnote reference detection needs superscripts; plain "word23" references are not linked (notes then go to the chapter end as `orphan`).
 * Text in right-to-left scripts, vertical text and rotated pages are not handled specially.

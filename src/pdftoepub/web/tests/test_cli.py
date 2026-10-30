@@ -10,7 +10,7 @@ def test_no_args_launches_ui_on_loopback_and_opens_browser(monkeypatch, tmp_path
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setattr(cli, "_free_port", lambda host, preferred=8000: 8123)
 
-    def fake_run(host, port, *, open_browser=False, reload=False):
+    def fake_run(host, port, *, open_browser=False, reload=False, desktop=False):
         calls.update(host=host, port=port, open=open_browser)
         return 0
 

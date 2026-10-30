@@ -4,10 +4,13 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import os
 import re
 import shutil
 import tempfile
+import threading
+import time
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,6 +25,13 @@ from .config import Settings
 from .jobs import JOB_ID_RE, JobManager, parse_options, safe_filename
 from .preview import CSP, render_preview
 
+try:
+    from importlib.metadata import version as _dist_version
+
+    VERSION = _dist_version("pdftoepub")
+except Exception:  # not installed (frozen / source tree)
+    VERSION = "0.1.0"
+LOCAL_CLIENTS = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 STATIC = Path(__file__).parent / "static"
 CHUNK = 1024 * 1024
 FRAMING_SLACK = 256 * 1024  # multipart boundaries + the options field on top of the file itself
@@ -75,6 +85,9 @@ class UploadLimit:
                 await too_big(scope, receive, send)
 
 
+log = logging.getLogger("pdftoepub.web")
+
+
 def _host_only(value: str) -> str:
     value = value.strip().lower()
     if value.startswith("["):
@@ -94,12 +107,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         manager.recover()
         manager.start_janitor()
+        stop = threading.Event()
+        if settings.desktop and settings.idle_exit_min:
+            app.state.last_activity = time.monotonic()
+            threading.Thread(target=idle_loop, args=(stop,), name="idle-exit", daemon=True).start()
         yield
+        stop.set()
         manager.shutdown()
 
     app = FastAPI(title="pdftoepub", lifespan=lifespan)
     app.state.settings = settings
     app.state.jobs = manager
+    app.state.request_exit = None  # set by the desktop launcher: callable that makes the server stop
+    app.state.last_activity = time.monotonic()
+
+    def idle_check() -> bool:
+        """Desktop safety net: stop when nobody has talked to us for IDLE_EXIT_MIN and no job is pending."""
+        if not settings.desktop or not settings.idle_exit_min or manager.pending():
+            return False
+        if time.monotonic() - app.state.last_activity < settings.idle_exit_min * 60:
+            return False
+        log.info("no activity for %s min and no job pending: exiting", settings.idle_exit_min)
+        if app.state.request_exit:
+            app.state.request_exit()
+        return True
+
+    app.state.idle_check = idle_check
+
+    def idle_loop(stop: threading.Event) -> None:
+        while not stop.wait(max(1.0, min(30.0, settings.idle_exit_min * 15))):
+            if idle_check():
+                return
 
     def auth(request: Request) -> None:
         if not settings.auth_token:
@@ -119,11 +157,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True}
+        return {"ok": True, "app": "pdftoepub", "version": VERSION}
+
+    @app.get("/api/ping", dependencies=[Depends(auth)])
+    def ping():
+        return {"ok": True}  # the middleware below counts any request as activity; this one is the front's heartbeat
 
     @app.get("/api/config")
     def config():
-        return {"auth_required": bool(settings.auth_token), "max_upload_mb": settings.max_upload_mb}
+        return {"auth_required": bool(settings.auth_token), "max_upload_mb": settings.max_upload_mb,
+                "desktop": settings.desktop}
+
+    @app.post("/api/shutdown", status_code=202, dependencies=[Depends(auth)])
+    def shutdown(request: Request):
+        # Desktop mode only; the Host/Origin guard below has already run. The custom header cannot be set by a
+        # cross-origin page without a CORS preflight, which this app never answers.
+        if not settings.desktop:
+            raise HTTPException(404, "Not Found")
+        if (request.client.host if request.client else "") not in LOCAL_CLIENTS:
+            raise HTTPException(403, "Only this computer may stop the application")
+        if request.headers.get("x-requested-with") != "pdftoepub":
+            raise HTTPException(403, "Missing X-Requested-With header")
+        n = manager.cancel_all()
+        log.info("shutdown requested from the web UI (%d job(s) cancelled)", n)
+        if app.state.request_exit:
+            t = threading.Timer(0.5, app.state.request_exit)  # let the 202 reach the browser first
+            t.daemon = True
+            t.start()
+        return {"ok": True}
 
     @app.post("/api/jobs", status_code=201, dependencies=[Depends(auth)])
     async def create_job(request: Request):
@@ -292,6 +353,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             return JSONResponse({"detail": "Cross-origin request refused"}, status_code=403)
                         break
         return await call_next(request)
+
+    @app.middleware("http")
+    async def activity(request: Request, call_next):
+        app.state.last_activity = time.monotonic()
+        try:
+            return await call_next(request)
+        finally:
+            app.state.last_activity = time.monotonic()
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

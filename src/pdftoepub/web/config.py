@@ -33,6 +33,8 @@ class Settings:
     max_pages: int | None = 2000
     allowed_hosts: tuple[str, ...] = ()
     janitor_interval_s: float = 600.0
+    desktop: bool = False  # set by the no-argument launch only
+    idle_exit_min: float = 15.0  # desktop mode: exit after this many idle minutes (0 = never)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -46,5 +48,6 @@ class Settings:
             job_timeout_s=_float("JOB_TIMEOUT_S", 600.0) or None,
             job_max_mem_mb=_int("JOB_MAX_MEM_MB", 2048, 0) or None,
             max_pages=_int("MAX_PAGES", 2000, 0) or None,
+            idle_exit_min=max(0.0, _float("IDLE_EXIT_MIN", 15.0)),
             allowed_hosts=tuple(h.strip().lower() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()),
         )

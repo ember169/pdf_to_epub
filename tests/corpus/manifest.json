@@ -242,7 +242,94 @@
         "running-headers"
       ],
       "notes": "438-page scan with IA's OCR text layer (invisible text over page images).",
-      "sha256": "39fa77945a3841fa08eec90381ae07978e7f46fa182db7fe48b9ab539ed83af8"
+      "sha256": "39fa77945a3841fa08eec90381ae07978e7f46fa182db7fe48b9ab539ed83af8",
+      "chapters_gt": {
+        "checked": "page images, 2026-10-30; level 1 = the seven essays (each after a half-title page), level 2 = the page-opening sections of 'Du roman' and 'De la critique' (TABLE pp. 429-430, printed page + 14 = PDF page). Roman-numeral parts inside essays are level 3 and not listed.",
+        "level1": [
+          {
+            "title": "Le Roman expérimental",
+            "page": 15
+          },
+          {
+            "title": "Lettre à la jeunesse",
+            "page": 71
+          },
+          {
+            "title": "Le Naturalisme au théâtre",
+            "page": 123
+          },
+          {
+            "title": "L'Argent dans la littérature",
+            "page": 173
+          },
+          {
+            "title": "Du roman",
+            "page": 219
+          },
+          {
+            "title": "De la critique",
+            "page": 303
+          },
+          {
+            "title": "La République et la littérature",
+            "page": 387
+          }
+        ],
+        "level2": [
+          {
+            "title": "Le sens du réel",
+            "page": 219
+          },
+          {
+            "title": "L'expression personnelle",
+            "page": 227
+          },
+          {
+            "title": "La formule critique appliquée au roman",
+            "page": 234
+          },
+          {
+            "title": "De la description",
+            "page": 241
+          },
+          {
+            "title": "Trois débuts",
+            "page": 248
+          },
+          {
+            "title": "Les documents humains",
+            "page": 269
+          },
+          {
+            "title": "Les frères Zemganno",
+            "page": 277
+          },
+          {
+            "title": "Polémiques",
+            "page": 303
+          },
+          {
+            "title": "Le réalisme",
+            "page": 318
+          },
+          {
+            "title": "Les chroniques parisiennes de Sainte-Beuve",
+            "page": 326
+          },
+          {
+            "title": "Un prix de Rome littéraire",
+            "page": 362
+          },
+          {
+            "title": "La haine de la littérature",
+            "page": 369
+          },
+          {
+            "title": "La littérature obscène",
+            "page": 376
+          }
+        ]
+      }
     },
     {
       "id": "ia-island-plant",
@@ -258,7 +345,25 @@
         "novel"
       ],
       "notes": "English novella scan with OCR text layer.",
-      "sha256": "fd97527812aa5310fdc656cebc49ddb2c8160ec195bd0fcc3c5198ec7c20d5cc"
+      "sha256": "fd97527812aa5310fdc656cebc49ddb2c8160ec195bd0fcc3c5198ec7c20d5cc",
+      "chapters_gt": {
+        "checked": "page images, 2026-10-30; each chapter opens a page with 'I.' / 'II.' / 'III.' over a small-caps title (Part III also has a decorated plate on p. 69).",
+        "level1": [
+          {
+            "title": "The Roots",
+            "page": 11
+          },
+          {
+            "title": "The Green Branches",
+            "page": 39
+          },
+          {
+            "title": "The Result of Drought and Winter",
+            "page": 71
+          }
+        ],
+        "level2": []
+      }
     },
     {
       "id": "ia-innkeeper-source",
@@ -274,7 +379,17 @@
         "short"
       ],
       "notes": "18-page scan; also the source of the image-only excerpt below.",
-      "sha256": "26a43518014fc61c5ded45787e96fa80c7fba3a78b053039bb11f20dd8cd5f81"
+      "sha256": "26a43518014fc61c5ded45787e96fa80c7fba3a78b053039bb11f20dd8cd5f81",
+      "chapters_gt": {
+        "checked": "page images, 2026-10-30; one story, sections separated by '* * * * *' only.",
+        "level1": [
+          {
+            "title": "The Innkeeper's Tale",
+            "page": 5
+          }
+        ],
+        "level2": []
+      }
     },
     {
       "id": "scan-only-en",

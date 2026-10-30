@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from urllib.parse import quote, urlsplit, urlunsplit
 
+from . import openings
 from .ir import (Block, Chapter, Figure, Footnote, Heading, Line, ListBlock, Paragraph, Run, Table)
 from .layout import BULLET_RE, GLYPH_BULLET_RE, TERMINAL_RE, Ctx, RawBlock, RawNote, is_centered
 
@@ -23,7 +24,10 @@ _CAPTION_RE = re.compile(r"^\s*(fig(?:ure|\.)?|figure|tableau|table|abb(?:ildung
 # Runs
 # ---------------------------------------------------------------------------
 def _style(r: Run) -> tuple:
-    return (r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref)
+    return (r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref, r.display, r.image, r.eqno)
+
+
+_PLAIN = _style(Run(""))
 
 
 def normalize_runs(pieces: list[Run]) -> list[Run]:
@@ -50,37 +54,39 @@ def normalize_runs(pieces: list[Run]) -> list[Run]:
     exploded = [r for r in exploded if r.text != ""]
     # whitespace-only pieces take the style of identical neighbours
     for i, r in enumerate(exploded):
-        if r.text.strip() == "" and 0 < i < len(exploded) - 1:
+        if r.text.strip() == "" and 0 < i < len(exploded) - 1 and r.image is None:
             a, b = exploded[i - 1], exploded[i + 1]
-            if _style(a) == _style(b) and not a.sup and not a.sub and a.noteref is None and a.link == b.link:
-                r.bold, r.italic, r.mono, r.link = a.bold, a.italic, a.mono, a.link
+            if (_style(a) == _style(b) and not a.sup and not a.sub and a.noteref is None and a.link == b.link
+                    and a.image is None and not a.eqno):
+                r.bold, r.italic, r.mono, r.link, r.display = a.bold, a.italic, a.mono, a.link, a.display
     # merge equal styles
     merged: list[Run] = []
     for r in exploded:
-        if merged and _style(merged[-1]) == _style(r):
+        if merged and _style(merged[-1]) == _style(r) and r.image is None:
             merged[-1].text += r.text
         else:
-            merged.append(Run(r.text, r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref))
+            merged.append(_clone(r, r.text))
     # move edge whitespace out of styled runs
     out: list[Run] = []
     for r in merged:
-        if _style(r) == (False, False, False, False, False, None, None):
+        if _style(r) == _PLAIN or r.image is not None:
             out.append(r)
             continue
         lead = len(r.text) - len(r.text.lstrip())
         trail = len(r.text) - len(r.text.rstrip())
+        edge = Run("", display=r.display)  # spaces stay inside their display formula
         if lead == len(r.text):
-            out.append(Run(r.text))
+            out.append(_clone(edge, r.text))
             continue
         if lead:
-            out.append(Run(r.text[:lead]))
-        out.append(Run(r.text.strip(), r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref))
+            out.append(_clone(edge, r.text[:lead]))
+        out.append(_clone(r, r.text.strip()))
         if trail:
-            out.append(Run(r.text[len(r.text) - trail:]))
+            out.append(_clone(edge, r.text[len(r.text) - trail:]))
     # final merge of plain pieces, trim ends, collapse double spaces
     final: list[Run] = []
     for r in out:
-        if final and _style(final[-1]) == _style(r):
+        if final and _style(final[-1]) == _style(r) and r.image is None:
             final[-1].text += r.text
         else:
             final.append(r)
@@ -98,7 +104,7 @@ def normalize_runs(pieces: list[Run]) -> list[Run]:
 
 
 def _clone(r: Run, text: str) -> Run:
-    return Run(text, r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref)
+    return Run(text, r.bold, r.italic, r.sup, r.sub, r.mono, r.link, r.noteref, r.display, r.image, r.eqno)
 
 
 def _last_word(runs: list[Run]) -> str:
@@ -191,7 +197,7 @@ def _is_marker_line(text: str) -> bool:
 
 
 def _heading_key(blk: RawBlock, body: float):
-    if blk.kind != "text" or not blk.lines:
+    if blk.kind != "text" or not blk.lines or blk.math:
         return None
     text = blk.text
     n = len(text)
@@ -356,11 +362,14 @@ def merge_code_blocks(blocks: list[Block]) -> list[Block]:
 
 
 def convert_blocks(raw: list[RawBlock], ctx: Ctx, notes: dict[int, list[RawNote]],
-                   headings: HeadingModel, ) -> tuple[list[Block], dict[str, Footnote]]:
-    """Convert layout blocks to IR blocks (headings/paragraphs/quotes/pre/tables/figures) and footnotes."""
+                   headings: HeadingModel, plan=None) -> tuple[list[Block], dict[str, Footnote]]:
+    """Convert layout blocks to IR blocks (headings/paragraphs/quotes/pre/tables/figures) and footnotes. `plan`
+    (`openings.Plan`, scanned books) forces the chapter / section headings found from the page layout; other OCR
+    headings then stay out of chapter splitting."""
     out: list[Block] = []
     footnotes: dict[str, Footnote] = {}
     note_ids: dict[int, dict[str, str]] = {}
+    chapter_title = ""  # the current chapter's title (plan)
     for pno, ns in notes.items():
         ids = {}
         for k, n in enumerate(ns, 1):
@@ -373,6 +382,11 @@ def convert_blocks(raw: list[RawBlock], ctx: Ctx, notes: dict[int, list[RawNote]
     for b in raw:
         if b.kind == "image":
             it = b.item
+            if it.kind == "formula":
+                runs = ([Run(it.lead)] if it.lead else []) + [Run(it.alt, image=(it.image_id, it.width_em), display=1)]
+                runs += [Run(it.label, eqno=True, display=1)] if it.label else []
+                out.append(Paragraph(runs, "dmath", b.page, b.y0, b.break_before, False, ctx.body_size, y1=it.bbox[3]))
+                continue
             out.append(Figure(it.image_id, "", None, b.page, b.y0, b.break_before))
             continue
         if b.kind == "table":
@@ -380,11 +394,27 @@ def convert_blocks(raw: list[RawBlock], ctx: Ctx, notes: dict[int, list[RawNote]
             rows = [[[Run(c)] if c else [] for c in row] for row in t.rows]
             out.append(Table(rows, t.header, b.page, b.y0, b.break_before))
             continue
+        if plan is not None:
+            if id(b) in plan.skip:
+                continue
+            forced = plan.forced.get(id(b))
+            if forced is not None:
+                level, group, text = forced
+                runs = [Run(text)] if text else runs_from_lines([l for g in group for l in g.lines], ctx)
+                for r in runs:
+                    r.bold = False
+                    r.text = re.sub(r"\s{2,}", " ", r.text)
+                runs = normalize_runs(runs)
+                if runs:
+                    out.append(Heading(level, runs, b.page, b.y0, b.size, b.break_before))
+                    if level == 1 or not chapter_title:
+                        chapter_title = plain(runs)
+                continue
         runs = runs_from_lines(b.lines, ctx)
         if not runs:
             continue
         ids = note_ids.get(b.page, {})
-        if ids:
+        if ids and not b.math:  # an exponent in a displayed formula is not a footnote mark
             used = used_markers.setdefault(b.page, set())
             for r in runs:
                 if r.sup and r.text.strip() in ids and r.text.strip() not in used:
@@ -395,10 +425,19 @@ def convert_blocks(raw: list[RawBlock], ctx: Ctx, notes: dict[int, list[RawNote]
             for r in runs:
                 r.bold = False
             runs = normalize_runs(runs)
-            weak = b.ocr and not strong_ocr_heading(b, ctx.body_size)
+            weak = b.ocr and (plan is not None or not strong_ocr_heading(b, ctx.body_size))
+            if b.ocr and plan is not None:
+                if chapter_title and openings.similar(plain(runs), chapter_title, 0.85):
+                    continue  # the chapter's title again: its running head ("‘THE RESULT OF DROUGHT …" after plates)
+                rank = max(rank, 3)
             out.append(Heading(min(rank, 4), runs, b.page, b.y0, b.size, b.break_before, weak=weak))
             continue
         size = b.size
+        if b.math:
+            for r in runs:
+                r.display = 1
+            out.append(Paragraph(runs, "dmath", b.page, b.y0, b.break_before, False, size, y1=max(l.y1 for l in b.lines)))
+            continue
         if b.mono:
             out.append(Paragraph([Run(_pre_text(b.lines), mono=True)], "pre", b.page, b.y0, b.break_before, False, size,
                                  y1=max(l.y1 for l in b.lines)))
@@ -414,6 +453,49 @@ def convert_blocks(raw: list[RawBlock], ctx: Ctx, notes: dict[int, list[RawNote]
         p = Paragraph(runs, kind, b.page, b.y0, b.break_before, b.first_indent, size, y1=max(l.y1 for l in b.lines))
         out.append(p)
     return out, footnotes
+
+
+def inline_display_math(blocks: list[Block]) -> list[Block]:
+    """A display formula belongs to the sentence around it: it joins the paragraph before it (as a centred block
+    inside the <p>), and the text after it continues that paragraph unless it starts a new one (indented, or a new
+    sentence after a formula ending with a full stop)."""
+    out: list[Block] = []
+    open_p: Paragraph | None = None  # paragraph that just received a formula
+    continued = False  # open_p already took the text after its formula
+    n = 0
+    for b in blocks:
+        if isinstance(b, Paragraph) and b.kind == "dmath":
+            n += 1
+            runs = [_clone(r, r.text) for r in b.runs]
+            for r in runs:
+                if r.display:
+                    r.display = n
+            prev = out[-1] if out else None
+            if open_p is None and isinstance(prev, Paragraph) and prev.kind == "p":
+                open_p = prev
+            if open_p is not None:
+                open_p.runs = open_p.runs + [Run(" ")] + runs
+                open_p.y1 = b.y1
+            else:
+                open_p = Paragraph(runs, "p", b.page, b.y0, b.break_before, False, b.size, y1=b.y1)
+                out.append(open_p)
+            continued = False
+            continue
+        if open_p is not None and isinstance(b, Paragraph) and b.kind == "p" and not b.indented:
+            text = plain(b.runs)
+            last = plain([r for r in open_p.runs if r.display and not r.eqno])[-1:]
+            # the text right after the formula continues its sentence; later pieces (split by a page break or a
+            # footnote) only while they visibly continue it (lower case), never a table row or a new sentence
+            ok = bool(text) and (text[0].islower() if continued
+                                 else text[0].islower() or not text[0].isalpha() or last not in ".!?")
+            if ok and not _marker(text):
+                open_p.runs = open_p.runs + [Run(" ")] + b.runs
+                open_p.y1 = b.y1
+                continued = True
+                continue
+        open_p = None
+        out.append(b)
+    return out
 
 
 def merge_across_breaks(blocks: list[Block], ctx: Ctx) -> list[Block]:

@@ -176,8 +176,9 @@ def _merge_misread_heads(keyed: list[list[tuple[object, tuple]]]) -> None:
                 entries[i] = (obj, best)
 
 
-def remove_running(pages: list[PageData], warnings: list[str]) -> int:
-    """Drop running headers/footers and page numbers: text that recurs in the top/bottom band on neighbouring pages."""
+def remove_running(pages: list[PageData], warnings: list[str], heads: Counter | None = None) -> int:
+    """Drop running headers/footers and page numbers: text that recurs in the top/bottom band on neighbouring pages.
+    `heads` (optional) counts the removed running lines by normalised text (folios and punctuation stripped)."""
     n = len(pages)
     if n == 0:
         return 0
@@ -228,6 +229,8 @@ def remove_running(pages: list[PageData], warnings: list[str]) -> int:
         for obj, key in entries:
             if n >= 3 and chained(key, p.number):
                 (drop_lines if isinstance(obj, Line) else drop_imgs).add(id(obj))
+                if heads is not None and isinstance(obj, Line):
+                    heads[re.sub(r"[^a-z]", "", key[1])] += 1
         # isolated page numbers, even when not repeated (e.g. first page)
         H = p.height
         folios = []
@@ -368,6 +371,53 @@ def _nchars(items) -> float:
     return statistics.mean(ls) if ls else 99.0
 
 
+def _prose_gutter(items: list, gaps: list[tuple[float, float]]) -> tuple[float, float] | None:
+    """The vertical gap with running text on both sides (>= 3 lines of >= 25 characters each side, and most of the
+    text lines of each side), best balanced: a column gutter."""
+    best, score = None, 0
+    for g in gaps:
+        cut = (g[0] + g[1]) / 2
+        left = [i for i in items if isinstance(i, Line) and (_bb(i)[0] + _bb(i)[2]) / 2 <= cut]
+        right = [i for i in items if isinstance(i, Line) and (_bb(i)[0] + _bb(i)[2]) / 2 > cut]
+        lp = sum(1 for i in left if len(i.text.strip()) >= 25)
+        rp = sum(1 for i in right if len(i.text.strip()) >= 25)
+        if lp >= 3 and rp >= 3 and min(lp, rp) > score:
+            best, score = g, min(lp, rp)
+    return best
+
+
+def _bands_between_wide(bands: list[list], items: list) -> list[list]:
+    """Horizontal cuts only around full-width elements (titles, author blocks, wide figures / tables, their captions):
+    the two-column text between two of them stays one band, so its columns are found as a whole instead of being
+    sliced at every blank row shared by both columns (which glued a left-column line to a right-column table row)."""
+    if len(bands) < 3:
+        return bands
+    x0 = min(_bb(i)[0] for i in items)
+    x1 = max(_bb(i)[2] for i in items)
+    w = max(x1 - x0, 1.0)
+
+    def wide(band) -> bool:
+        return any(_bb(i)[2] - _bb(i)[0] >= 0.6 * w for i in band)
+
+    groups: list[list[list]] = []
+    for band in bands:
+        if groups and not wide(band) and not wide(groups[-1][-1]):
+            groups[-1].append(band)
+        else:
+            groups.append([band])
+    out: list[list] = []
+    for g in groups:
+        merged = [i for band in g for i in band]
+        if len(g) > 1:
+            iv = _merge_intervals([(_bb(i)[0], _bb(i)[2]) for i in merged])
+            gaps = [(iv[k][1], iv[k + 1][0]) for k in range(len(iv) - 1)]
+            if _prose_gutter(merged, gaps) is None:  # no running text in two columns (a table of labels / values)
+                out += g
+                continue
+        out.append(merged)
+    return out if len(out) > 1 else bands
+
+
 def xycut(items: list, ctx: Ctx, allow_cols: bool, depth: int = 0) -> list[Flow]:
     if not items:
         return []
@@ -378,6 +428,17 @@ def xycut(items: list, ctx: Ctx, allow_cols: bool, depth: int = 0) -> list[Flow]
     if allow_cols and len(items) >= 4:
         merged = _merge_intervals([(_bb(i)[0], _bb(i)[2]) for i in items])
         gaps = [(merged[k][1], merged[k + 1][0]) for k in range(len(merged) - 1) if merged[k + 1][0] - merged[k][1] >= min_gap]
+        gutter = _prose_gutter(items, gaps)
+        if gutter is not None:  # columns of running text: cut there first (a table's cell gaps come later, inside)
+            cut = (gutter[0] + gutter[1]) / 2
+            sides = [[i for i in items if (_bb(i)[0] + _bb(i)[2]) / 2 <= cut], [i for i in items if (_bb(i)[0] + _bb(i)[2]) / 2 > cut]]
+            flows = []
+            for side in sides:
+                sub = xycut(side, ctx, allow_cols, depth + 1)
+                for f in sub:
+                    f.kind = "col"
+                flows += sub
+            return flows
         while gaps:
             cuts = [(a + b) / 2 for a, b in gaps]
             sides: list[list] = [[] for _ in range(len(cuts) + 1)]
@@ -411,6 +472,8 @@ def xycut(items: list, ctx: Ctx, allow_cols: bool, depth: int = 0) -> list[Flow]
     for it in items:
         cy = (_bb(it)[1] + _bb(it)[3]) / 2
         bands[sum(1 for c in cuts if cy > c)].append(it)
+    if allow_cols:
+        bands = _bands_between_wide(bands, items)
     flows = []
     pending: list = []
     for band in bands:
@@ -445,6 +508,7 @@ class RawBlock:
     ocr: bool = False  # from an OCR page / OCR text layer: sizes are estimates, no bold / italic
     space_above: float | None = None  # gap to the previous line of the same flow (None: first in its flow)
     centred: bool = False
+    math: bool = False  # a one-row display formula (`Line.kind == "dmath"`)
 
     @property
     def text(self) -> str:
@@ -514,7 +578,7 @@ def join_rows(items: list) -> list:
             continue
         row = [it]
         j = i + 1
-        while j < n and isinstance(items[j], Line):
+        while j < n and isinstance(items[j], Line) and it.kind != "dmath" and items[j].kind != "dmath":
             ov = min(it.y1, items[j].y1) - max(it.y0, items[j].y0)
             b = items[j]
             side_by_side = all(b.x0 >= r.x1 - 2 or b.x1 <= r.x0 + 2 for r in row)  # one row = disjoint in x
@@ -620,6 +684,12 @@ def split_flow(items: list, ctx: Ctx, page: PageData, fallback: tuple[float, flo
     for it in items:
         if isinstance(it, Line):
             if not it.text.strip():
+                continue
+            if it.kind == "dmath":  # a display formula is a block of its own
+                flush()
+                cur.append(it)
+                flush()
+                blocks[-1].math = True
                 continue
             if cur and _is_break(cur[-1], it, left, right, ctx, page.source == "ocr" or page.ocr_layer):
                 flush()

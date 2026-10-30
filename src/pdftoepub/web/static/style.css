@@ -75,3 +75,7 @@ footer { text-align: center; margin-top: 24px; }
 .pv-head h2 { margin: 0; overflow-wrap: anywhere; }
 #pv-frame { flex: 1; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; margin-top: 8px; }
 @media (forced-colors: active) { .fill { background: Highlight; } .bar { border: 1px solid CanvasText; } }
+.topbar { gap: 8px; align-items: center; }
+.quit-box { height: auto; max-width: 440px; gap: 4px; }
+.quit-box .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+#stopped { text-align: center; padding-top: 18vh; }

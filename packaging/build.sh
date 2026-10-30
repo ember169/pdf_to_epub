@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local portable builds (no CI). Usage: packaging/build.sh [mac] [linux-arm64] [linux-x86_64] [windows]
+# Local portable builds (no CI). Usage: packaging/build.sh [mac|mac-arm64] [mac-x86_64] [linux-arm64] [linux-x86_64] [windows]
 # Output in dist/: pdftoepub-<os>-<arch> and SHA256SUMS.  Windows: use packaging/build.ps1 on a Windows machine.
 # macOS output is a self-extracting launcher around a PyInstaller folder build (see make_sfx).
 set -euo pipefail
@@ -13,6 +13,7 @@ mkdir -p dist
 # make_sfx DIR OUT: one shell-script+tar.gz file. First run unpacks to ~/Library/Caches/pdftoepub/<hash>/, later runs
 # exec straight into it (macOS rescans freshly extracted files on every launch of a PyInstaller one-file build, ~4 s).
 make_sfx() {
+  mkdir -p build
   local dir=$1 out=$2 payload=build/payload.tgz hdr=build/hdr.sh
   (cd "$(dirname "$dir")" && COPYFILE_DISABLE=1 tar czf "$ROOT/$payload" "$(basename "$dir")")
   local h; h=$(shasum -a 256 "$payload" | cut -c1-16)
@@ -51,32 +52,60 @@ prepare_tess_mac() {
   ! otool -L "$d/tesseract" "$d"/libs/*.dylib | grep -E "/opt/homebrew|/usr/local" || { echo "unrelocated dylib references remain"; return 1; }
 }
 
-build_mac() {
+# Tesseract for a macOS build: the universal from-source build (packaging/build_tesseract_macos.sh, macOS 11+, both
+# archs) when present; otherwise Homebrew's (arm64 only, needs the newest macOS); x86_64 without it needs ALLOW_NO_OCR=1.
+mac_tess() {  # $1 arch -> prints TESS_DIR (or nothing)
+  local arch=$1 d=$ROOT/build/mac-tess-$1
+  if [ -x build/tess-macos/tesseract ]; then
+    packaging/fetch_tessdata.sh >/dev/null
+    rm -rf "$d"; mkdir -p "$d/tessdata"; lipo -thin "$arch" build/tess-macos/tesseract -output "$d/tesseract"
+    cp build/tess-macos/LICENSES.txt "$d/"; cp -R build/tess-macos/tessdata/. "$d/tessdata/"
+    cp packaging/tessdata/eng.traineddata packaging/tessdata/fra.traineddata "$d/tessdata/"; echo "$d"
+  elif [ "$arch" = arm64 ]; then
+    prepare_tess_mac "$d" >&2 && echo "$d"
+  elif [ -n "${ALLOW_NO_OCR:-}" ]; then
+    echo "WARNING: building $arch WITHOUT bundled OCR (run packaging/build_tesseract_macos.sh first)" >&2
+  else
+    echo "ERROR: no $arch tesseract: run packaging/build_tesseract_macos.sh (or set ALLOW_NO_OCR=1)" >&2; return 1
+  fi
+}
+
+build_mac() {  # $1 = arm64 | x86_64 (x86_64 runs under Rosetta on Apple silicon)
   [ "$(uname -s)" = Darwin ] || { echo "mac target needs macOS"; return 1; }
-  local arch; arch=$(uname -m); [ "$arch" = aarch64 ] && arch=arm64
-  local name="pdftoepub-macos-$arch"
-  rm -rf packaging/.buildvenv build
-  ${PYTHON:-python3} -m venv packaging/.buildvenv
-  local v=packaging/.buildvenv/bin
-  $v/python -m pip install -q --upgrade pip
+  local arch=${1:-arm64} uvarch=aarch64; [ "$arch" = x86_64 ] && uvarch=x86_64
+  local name="pdftoepub-macos-$arch" W=$ROOT/build/mac-$arch v=$ROOT/packaging/.buildvenv-$arch
+  local A=(arch "-$arch")
+  rm -rf "$W" "$v"; mkdir -p "$W"
+  # python-build-standalone CPython (via uv): per-arch, built for macOS 11+, unlike Homebrew's Python
+  local py; py=$(uv python find "cpython-3.12.13-macos-$uvarch-none") || { uv python install "cpython-3.12.13-macos-$uvarch-none" && py=$(uv python find "cpython-3.12.13-macos-$uvarch-none"); }
+  "${A[@]}" "$py" -m venv "$v"
+  "${A[@]}" "$v/bin/python" -m pip install -q --upgrade pip
   # same exact, hash-checked versions as the Docker image (requirements.lock) + pinned PyInstaller
-  $v/python -m pip install -q --require-hashes --no-deps -r requirements.lock -r packaging/build.lock -r packaging/build-backend.lock
-  $v/python -m pip install -q --no-deps --no-build-isolation .
-  # clean venv with ONLY runtime deps: PyMuPDF (AGPL) must not be present
-  $v/python -I -c "import importlib.util as u,sys; sys.exit(1 if u.find_spec('pymupdf') else 0)" \
+  local locks=(-r requirements.lock -r packaging/build.lock -r packaging/build-backend.lock)
+  [ "$arch" = x86_64 ] && locks=(-r packaging/macos-x86_64.lock)  # Intel: last versions that still ship x86_64 wheels
+  "${A[@]}" "$v/bin/python" -m pip install -q --require-hashes --no-deps --only-binary :all: "${locks[@]}"
+  # pypdfium2 >= 5.12 ships PDFium built for macOS 13; 5.9.0 (wheel tagged 11.0, PDFium actually built for 12.0) passes
+  # the same test suite, so macOS builds pin it: macOS 12 Monterey is then the floor of the whole app
+  "${A[@]}" "$v/bin/python" -m pip install -q --require-hashes --no-deps --only-binary :all: -r packaging/macos-pdfium.lock
+  "${A[@]}" "$v/bin/python" -m pip install -q --no-deps --no-build-isolation .
+  "${A[@]}" "$v/bin/python" -I -c "import importlib.util as u,sys; sys.exit(1 if u.find_spec('pymupdf') else 0)" \
     || { echo "pymupdf in build venv; refusing"; exit 1; }
-  prepare_tess_mac build/tess
-  $v/python packaging/gen_licenses.py build/THIRD_PARTY_LICENSES --tesseract
-  # Folder build (fast: no re-extraction on every launch), wrapped into ONE self-extracting file below.
-  (cd packaging && ONEDIR=1 TESS_DIR="$ROOT/build/tess" LICENSES_FILE="$ROOT/build/THIRD_PARTY_LICENSES" "$ROOT/$v/pyinstaller" --noconfirm --clean --distpath "$ROOT/build/out" --workpath "$ROOT/build/work" pdftoepub.spec)
-  $v/pyi-archive_viewer -l -r build/out/pdftoepub/pdftoepub 2>/dev/null > build/list || true
-  local n; n=$(wc -l < build/list)
-  [ "$n" -gt 100 ] && ! grep -i -E "pymupdf|fitz" build/list || { echo "ERROR: PyMuPDF found or archive unreadable"; exit 1; }
-  find build/out/pdftoepub \( -iname "*pymupdf*" -o -iname "fitz*" \) | grep . && { echo "ERROR: PyMuPDF files present"; exit 1; }
-  make_sfx build/out/pdftoepub "dist/$name"
-  echo "OK: $name built, no PyMuPDF inside"
-  cp build/THIRD_PARTY_LICENSES dist/THIRD_PARTY_LICENSES
-  rm -rf build
+  local tess; tess=$(mac_tess "$arch") || exit 1
+  "${A[@]}" "$v/bin/python" packaging/gen_licenses.py "$W/THIRD_PARTY_LICENSES" ${tess:+--tesseract}
+  # Folder build + .app bundle. The folder becomes the self-extracting CLI, the .app goes into the .dmg.
+  (cd packaging && ONEDIR=1 MAC_APP=1 TESS_DIR="$tess" LICENSES_FILE="$W/THIRD_PARTY_LICENSES" \
+    "${A[@]}" "$v/bin/pyinstaller" --noconfirm --clean --distpath "$W/out" --workpath "$W/work" pdftoepub.spec) >"$W/pyinstaller.log" 2>&1 \
+    || { tail -20 "$W/pyinstaller.log"; exit 1; }
+  find "$W/out" \( -iname "*pymupdf*" -o -iname "fitz*" \) | grep . && { echo "ERROR: PyMuPDF files present"; exit 1; }
+  lipo -archs "$W/out/pdftoepub/pdftoepub" | grep -qw "$arch" || { echo "ERROR: wrong architecture"; exit 1; }
+  packaging/audit_minos.sh "$W/out/pdftoepub.app" "${MAC_MIN_OS:-12.0}" || [ -n "${ALLOW_NEWER_MACOS:-}" ] \
+    || { echo "ERROR: some code needs a newer macOS than ${MAC_MIN_OS:-12.0} (ALLOW_NEWER_MACOS=1 to accept)"; exit 1; }
+  # sign the CLI payload BEFORE packing it, so the code extracted on users' machines is already signed
+  packaging/sign_macos.sh payload "$W/out/pdftoepub"
+  make_sfx "$W/out/pdftoepub" "dist/$name"
+  packaging/sign_macos.sh app "$W/out/pdftoepub.app" "dist/$name.dmg"
+  cp "$W/THIRD_PARTY_LICENSES" dist/THIRD_PARTY_LICENSES
+  echo "OK: dist/$name (CLI) + dist/$name.dmg (app), no PyMuPDF inside, $([ -n "$tess" ] && echo "with bundled OCR" || echo "WITHOUT bundled OCR")"
 }
 
 build_linux() {  # $1 = arm64 | x86_64
@@ -98,6 +127,6 @@ build_windows() {  # experimental: PyInstaller + Windows Python + Windows Tesser
 }
 
 for t in "${TARGETS[@]}"; do
-  case $t in mac) build_mac;; linux-arm64) build_linux arm64;; linux-x86_64) build_linux x86_64;; windows) build_windows;; *) echo "unknown target $t"; exit 1;; esac
+  case $t in mac|mac-arm64) build_mac arm64;; mac-x86_64) build_mac x86_64;; linux-arm64) build_linux arm64;; linux-x86_64) build_linux x86_64;; windows) build_windows;; *) echo "unknown target $t"; exit 1;; esac
 done
 (cd dist && : > SHA256SUMS && for f in pdftoepub-*; do case $f in *.zip|*-dir) ;; *) shasum -a 256 "$f" >> SHA256SUMS;; esac; done; cat SHA256SUMS)

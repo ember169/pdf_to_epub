@@ -31,3 +31,17 @@ Uploaded PDFs are removed as soon as conversion ends; jobs running at a restart 
 Tests: `pytest src/pdftoepub/web/tests`.
 
 Uploads are size-limited while streaming (Content-Length and byte count), at most one file + 4 form fields per request; 507 when free disk is low. Stale `DATA_DIR/tmp` uploads are swept by the janitor.
+
+## Desktop mode (no-argument launch)
+
+`pdftoepub` with no arguments (double-click / the macOS .app) runs in *desktop mode*; `serve` and Docker are unaffected.
+
+- `POST /api/shutdown` (desktop only, 404 otherwise): loopback clients only, needs the `X-Requested-With: pdftoepub`
+  header plus the usual Host/Origin guard and `AUTH_TOKEN` if set. Replies `202 {"ok":true}`, cancels queued/running
+  jobs (children killed), and stops the server ~0.5 s later. The header shows a Quit button that calls it.
+- `GET /api/config` has `"desktop": true`; `GET /healthz` returns `{"ok":true,"app":"pdftoepub","version":...}`.
+- Single instance: `DATA_DIR/desktop.json` (`{"port","pid"}`, mode 0600) is checked via `/healthz`; if it answers, the
+  browser is opened on it and the launch exits 0. The file is removed on exit (including SIGTERM/SIGHUP).
+- Idle exit: the page pings `GET /api/ping` every 60 s; the server exits after `IDLE_EXIT_MIN` minutes (default 15,
+  `0` disables) without any request and with no job queued or running.
+- Logs go to `DATA_DIR/desktop.log` (1 MB x 3, rotating) as well as the console.

@@ -49,6 +49,10 @@ class PdfDocument(ABC):
     def render_page(self, pno: int, dpi: float, gray: bool = False) -> "Image.Image":
         """Render the whole page for OCR or the cover."""
 
+    def render_region(self, pno: int, rect, dpi: int = 200, gray: bool = False):
+        """Render `rect` (page points, top-left origin) of page `pno` as an `ImageAsset`, or None (display formulas)."""
+        return None
+
     @abstractmethod
     def close(self) -> None: ...
 

@@ -26,5 +26,17 @@ pyz = PYZ(a.pure)
 if os.environ.get("ONEDIR"):
     exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="pdftoepub", console=True, upx=False)
     coll = COLLECT(exe, a.binaries, a.datas, name="pdftoepub")
+    if os.environ.get("MAC_APP"):  # double-clickable macOS app: no args -> web UI in the browser
+        app = BUNDLE(
+            coll, name="pdftoepub.app", bundle_identifier="org.pdftoepub.app",
+            icon=os.environ.get("MAC_ICON") or None, version=os.environ.get("APP_VERSION", "0.1.0"),
+            info_plist={
+                "CFBundleDisplayName": "pdftoepub",
+                "LSUIElement": True,  # no Dock icon/menu bar: it is a local web server; quit from the web UI
+                "LSMinimumSystemVersion": os.environ.get("MAC_MIN_OS", "12.0"),
+                "NSHighResolutionCapable": True,
+                "LSApplicationCategoryType": "public.app-category.productivity",
+            },
+        )
 else:
     exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name="pdftoepub", console=True, upx=False)

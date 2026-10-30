@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke-test every binary in dist/ in a clean environment, then regenerate dist/SHA256SUMS.
-#   macOS binary: natively under `env -i`           Linux binaries: clean debian:11-slim and ubuntu:20.04 containers (no Python/tesseract)
+#   macOS: CLI (arm64 natively, x86_64 under Rosetta) under `env -i`, and each .app from its .dmg via `open`           Linux binaries: clean debian:11-slim and ubuntu:20.04 containers (no Python/tesseract)
 #   Windows .exe: under Wine in Docker (needs the pte-winbase image: packaging/build.sh windows builds it)
 # Per binary: multiprocessing spawn; CLI text conversion; CLI OCR of the scanned fixture with no system tesseract;
 # no-argument launch starts the server (browser opening disabled via BROWSER=true); and with `serve`:
@@ -41,30 +41,85 @@ scan_log_ok() {
 # scenarios: "ENV...:modes"
 SCEN_DEFAULT="ok ocr"; SCEN_PAGES="pages"; SCEN_TIMEOUT="timeout"
 
-test_macos() {
-  local bin=$DIST/pdftoepub-macos-arm64 T; [ -x "$bin" ] || return 0
-  echo "== macOS arm64 (env -i, no venv, no tesseract on PATH)"
+skip() { echo "  SKIP $*"; }
+
+test_macos() {  # $1 = arm64 | x86_64 (x86_64 runs under Rosetta on Apple silicon)
+  local a=${1:-arm64} bin T; bin=$DIST/pdftoepub-macos-$a; [ -x "$bin" ] || return 0
+  [ "$a" = x86_64 ] && ! arch -x86_64 /usr/bin/true 2>/dev/null && { echo "== macOS x86_64: skipped (no Rosetta)"; return 0; }
+  echo "== macOS $a CLI$([ "$a" = x86_64 ] && echo " under Rosetta") (env -i, no venv, no tesseract on PATH)"
   T=$(mktemp -d); cp "$bin" "$T/p"
-  run() { env -i HOME="$T" PATH=/usr/bin:/bin "$BR" "$@"; }
+  local P=mac_$a
+  run() { env -i HOME="$T" PATH=/usr/bin:/bin "$BR" arch "-$a" "$@"; }
   [ "$(run "$T/p" --_spawn 2>&1 | tail -1)" = "spawn ok: 32" ] && pass "multiprocessing spawn" || fail "multiprocessing spawn"
-  run "$T/p" "$W/fx/single_column.pdf" -o "$W/out/mac_text.epub" -q >/dev/null 2>&1 && check_epub "$W/out/mac_text.epub" "The quick brown fox" && pass "CLI text" || fail "CLI text"
-  run "$T/p" "$W/fx/scanned.pdf" -o "$W/out/mac_scan.epub" -q > "$W/out/mac_scan.log" 2>&1; scan_log_ok "$W/out/mac_scan.log"
-  grep -q "1 OCR" "$W/out/mac_scan.log" && check_epub "$W/out/mac_scan.epub" "Optical character recognition" && pass "CLI OCR (bundled tesseract)" || fail "CLI OCR"
+  run "$T/p" "$W/fx/single_column.pdf" -o "$W/out/${P}_text.epub" -q >/dev/null 2>&1 && check_epub "$W/out/${P}_text.epub" "The quick brown fox" && pass "CLI text" || fail "CLI text"
+  local ocr=1; run "$T/p" --_diag 2>&1 | head -1 | grep -q "/tesseract/tesseract" || ocr=0
+  run "$T/p" "$W/fx/scanned.pdf" -o "$W/out/${P}_scan.epub" -q > "$W/out/${P}_scan.log" 2>&1; scan_log_ok "$W/out/${P}_scan.log"
+  if [ $ocr = 1 ]; then
+    grep -q "1 OCR" "$W/out/${P}_scan.log" && check_epub "$W/out/${P}_scan.epub" "Optical character recognition" && pass "CLI OCR (bundled tesseract)" || fail "CLI OCR"
+  else skip "CLI OCR: this build has no bundled tesseract (see packaging/build_tesseract_macos.sh)"; fi
   run "$T/p" > "$T/noarg.log" 2>&1 & local pid=$! url="" port
   for _ in $(seq 1 60); do url=$(grep -o 'http://127.0.0.1:[0-9]*' "$T/noarg.log" | head -1); [ -n "$url" ] && break; sleep 1; done
   port=${url##*:}; [ -n "$port" ] && for _ in $(seq 1 60); do curl -sf "localhost:$port/healthz" >/dev/null && break; sleep 1; done
   [ -n "$port" ] && curl -sf "localhost:$port/healthz" >/dev/null && pass "no-argument launch serves ($url)" || fail "no-argument launch"
   pkill -P $pid 2>/dev/null; kill $pid 2>/dev/null; wait $pid 2>/dev/null
   local n=0 sc
-  for sc in "default|$SCEN_DEFAULT" "MAX_PAGES=1|$SCEN_PAGES" "JOB_TIMEOUT_S=0.2|$SCEN_TIMEOUT"; do
+  for sc in "X=1|ok$([ $ocr = 1 ] && echo " ocr")" "MAX_PAGES=1|$SCEN_PAGES" "JOB_TIMEOUT_S=0.2|$SCEN_TIMEOUT"; do
     n=$((n+1)); local envs=${sc%%|*} modes=${sc##*|} port=$((18090+n))
-    [ "$envs" = default ] && envs=X=1
     run env "$envs" "$T/p" serve --port $port >/dev/null 2>&1 & pid=$!
     for m in $modes; do "$ROOT/packaging/smoke_web.sh" $port "$W/fx" "$W/out" $m | report_results "web[$envs] "; done
     pkill -P $pid 2>/dev/null; kill $pid 2>/dev/null; wait $pid 2>/dev/null
   done
-  mv "$W/out/web_ok.epub" "$W/out/mac_web_ok.epub" 2>/dev/null; mv "$W/out/web_ocr.epub" "$W/out/mac_web_ocr.epub" 2>/dev/null
-  check_web_epubs mac_web
+  mv "$W/out/web_ok.epub" "$W/out/${P}_web_ok.epub" 2>/dev/null; mv "$W/out/web_ocr.epub" "$W/out/${P}_web_ocr.epub" 2>/dev/null
+  check_web_epubs ${P}_web
+  test_macos_app "$a" $ocr
+}
+
+test_macos_app() {  # $1 arch, $2 ocr(0/1): mount the .dmg, launch the .app with `open` (no Terminal), use it, stop it
+  local a=$1 ocr=$2 dmg=$DIST/pdftoepub-macos-$1.dmg mnt T port pid
+  [ -f "$dmg" ] || return 0
+  echo "== macOS $a .app from the .dmg (open -n, BROWSER=true)"
+  T=$(mktemp -d); mnt=$(hdiutil attach -nobrowse -readonly -noautoopen "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}' | tail -1)
+  [ -d "$mnt/pdftoepub.app" ] && [ -L "$mnt/Applications" ] && pass "dmg contains pdftoepub.app + Applications link" || fail "dmg layout"
+  cp -R "$mnt/pdftoepub.app" "$T/"; hdiutil detach -quiet "$mnt"
+  codesign --verify --deep --strict "$T/pdftoepub.app" 2>/dev/null && pass "app signature valid ($(codesign -dv "$T/pdftoepub.app" 2>&1 | sed -n 's/^Authority=//p;s/^Signature=//p' | head -1))" || fail "app signature"
+  [ "$(lipo -archs "$T/pdftoepub.app/Contents/MacOS/pdftoepub")" = "$a" ] && pass "app architecture $a" || fail "app architecture"
+  pkill -f "pdftoepub.app/Contents/MacOS/pdftoepub" 2>/dev/null; sleep 1
+  open -n --env "$BR" --env "DATA_DIR=$T/data" "$T/pdftoepub.app"
+  for _ in $(seq 1 90); do port=$(lsof -nP -a -c pdftoepub -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}' | head -1); [ -n "$port" ] && break; sleep 1; done
+  port=${port##*:}
+  [ -n "$port" ] && pass "app started its server by itself (port $port)" || fail "app did not start a server"
+  if [ -n "$port" ]; then
+    "$ROOT/packaging/smoke_web.sh" "$port" "$W/fx" "$W/out" ok | report_results "app web "
+    [ "$ocr" = 1 ] && "$ROOT/packaging/smoke_web.sh" "$port" "$W/fx" "$W/out" ocr | report_results "app web "
+    mv "$W/out/web_ok.epub" "$W/out/app_${a}_web_ok.epub" 2>/dev/null; mv "$W/out/web_ocr.epub" "$W/out/app_${a}_web_ocr.epub" 2>/dev/null
+  fi
+  local pids; pids=$(pgrep -f "$T/pdftoepub.app/Contents/MacOS/pdftoepub" | tr '\n' ' ')
+  [ -f "$T/data/desktop.json" ] && pass "desktop.json written ($(tr -d '\n' < "$T/data/desktop.json"))" || fail "desktop.json missing"
+  [ -s "$T/data/desktop.log" ] && pass "desktop.log written" || fail "desktop.log missing"
+  curl -s "localhost:$port/api/config" | grep -q '"desktop":true' && pass "desktop mode reported by /api/config" || fail "desktop flag"
+  # single instance: a second launch must hand over to the running server and exit, not start another one
+  open -n --env "$BR" --env "DATA_DIR=$T/data" "$T/pdftoepub.app"; sleep 8
+  [ "$(lsof -nP -a -c pdftoepub -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1' | wc -l | tr -d ' ')" = 1 ] \
+    && [ "$(pgrep -f "$T/pdftoepub.app/Contents/MacOS/pdftoepub" | wc -l | tr -d ' ')" = "$(echo $pids | wc -w | tr -d ' ')" ] \
+    && pass "second launch reused the running instance" || fail "second launch started another server"
+  # the guard must refuse a shutdown request without the front's header
+  [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:$port/api/shutdown")" != 202 ] && pass "shutdown refused without X-Requested-With" || fail "unguarded shutdown"
+  # Quit, as the web UI's button does
+  [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-Requested-With: pdftoepub' -H "Origin: http://127.0.0.1:$port" "http://127.0.0.1:$port/api/shutdown")" = 202 ] \
+    && pass "POST /api/shutdown accepted" || fail "shutdown request"
+  for _ in $(seq 1 20); do pgrep -f "$T/pdftoepub.app/Contents/MacOS/pdftoepub" >/dev/null || break; sleep 0.5; done
+  pgrep -f "$T/pdftoepub.app/Contents/MacOS/pdftoepub" >/dev/null && { fail "app still running after shutdown"; pkill -f "$T/pdftoepub.app/Contents/MacOS/pdftoepub"; } || pass "app exited after Quit"
+  [ ! -f "$T/data/desktop.json" ] && pass "desktop.json removed on exit" || fail "stale desktop.json"
+  # idle auto-exit (IDLE_EXIT_MIN=0.2 -> 12 s): pinging like an open page keeps it alive; once the "page" is closed it exits
+  open -n --env "$BR" --env "DATA_DIR=$T/data" --env IDLE_EXIT_MIN=0.2 "$T/pdftoepub.app"
+  port=""; for _ in $(seq 1 60); do port=$(lsof -nP -a -c pdftoepub -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}' | head -1); [ -n "$port" ] && break; sleep 1; done
+  port=${port##*:}
+  for _ in $(seq 1 10); do curl -s -o /dev/null "localhost:$port/api/ping"; sleep 3; done   # 30 s of heartbeats
+  pgrep -f "$T/pdftoepub.app/Contents/MacOS/pdftoepub" >/dev/null && pass "idle: alive while the page pings (30 s > 12 s limit)" || fail "idle: exited despite activity"
+  local t0=$SECONDS; for _ in $(seq 1 60); do pgrep -f "$T/pdftoepub.app/Contents/MacOS/pdftoepub" >/dev/null || break; sleep 1; done
+  pgrep -f "$T/pdftoepub.app/Contents/MacOS/pdftoepub" >/dev/null && { fail "idle: still running 60 s after the last request"; pkill -f "$T/pdftoepub.app/Contents/MacOS/pdftoepub"; } \
+    || pass "idle: exited $((SECONDS - t0)) s after the last request (limit 12 s)"
+  grep -q "no activity" "$T/data/desktop.log" && pass "idle exit logged in desktop.log" || fail "idle exit not logged"
 }
 
 test_linux() {  # $1 = arm64|x86_64
@@ -155,8 +210,8 @@ PYEOF
 
 # ONLY=windows|macos|linux limits the run (debugging); default runs everything
 case "${ONLY:-all}" in
-  windows) test_windows;; macos) test_macos;; linux) test_linux arm64; test_linux x86_64;;
-  *) test_windows; test_macos; test_linux arm64; test_linux x86_64; epubcheck_all;;
+  windows) test_windows;; macos) test_macos arm64; test_macos x86_64;; linux) test_linux arm64; test_linux x86_64;;
+  *) test_windows; test_macos arm64; test_macos x86_64; test_linux arm64; test_linux x86_64; epubcheck_all;;
 esac
 (cd "$DIST" && : > SHA256SUMS && for f in pdftoepub-*; do case $f in *.zip|*-dir) ;; *) shasum -a 256 "$f" >> SHA256SUMS;; esac; done; echo; cat SHA256SUMS)
 [ $FAIL = 0 ] && echo "ALL SMOKE TESTS PASSED" || { echo "SOME SMOKE TESTS FAILED"; exit 1; }

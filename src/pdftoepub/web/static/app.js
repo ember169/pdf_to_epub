@@ -345,8 +345,57 @@ $("token-save").addEventListener("click", () => {
   token = $("token").value.trim(); store.set("pdftoepub-token", token); $("auth").hidden = true;
 });
 
+// ---- desktop mode: Quit button, heartbeat -------------------------------------------------------------------------
+const quitDlg = $("quit-dlg");
+let stopped = false, quitFocus = null;
+const isBusy = () => items.some((it) => ["uploading", "queued", "running", "waiting"].includes(it.state));
+function closeQuit() { quitDlg.hidden = true; wrap.removeAttribute("aria-hidden"); (quitFocus || $("quit")).focus(); }
+function openQuit() {
+  quitFocus = document.activeElement;
+  $("quit-text").textContent = t(isBusy() ? "quitBusy" : "quitText");
+  quitDlg.hidden = false; wrap.setAttribute("aria-hidden", "true"); $("quit-no").focus();
+}
+function showStopped() {
+  stopped = true; clearInterval(pingTimer);
+  quitDlg.hidden = true; wrap.hidden = true;
+  const s = $("stopped"); s.hidden = false;
+  $("stopped-title").textContent = t("stoppedTitle"); $("stopped-text").textContent = t("stoppedText");
+  document.title = t("stoppedTitle"); s.focus();
+}
+async function doQuit() {
+  $("quit-yes").disabled = true;
+  try {
+    const r = await fetch("/api/shutdown", { method: "POST", headers: { ...headers(), "X-Requested-With": "pdftoepub" } });
+    if (r.status !== 202) throw new Error(r.status);
+    showStopped();
+  } catch (_) {
+    $("quit-text").textContent = t("quitError"); $("quit-yes").disabled = false;
+  }
+}
+let pingTimer = 0;
+$("quit").addEventListener("click", openQuit);
+$("quit-no").addEventListener("click", closeQuit);
+$("quit-yes").addEventListener("click", doQuit);
+quitDlg.addEventListener("click", (e) => { if (e.target === quitDlg) closeQuit(); });
+document.addEventListener("keydown", (e) => {
+  if (quitDlg.hidden) return;
+  if (e.key === "Escape") { e.preventDefault(); closeQuit(); }
+  else if (e.key === "Tab") {
+    const stops = [$("quit-no"), $("quit-yes")].filter((b) => !b.disabled);
+    const i = stops.indexOf(document.activeElement);
+    e.preventDefault();
+    stops[(i + (e.shiftKey ? -1 : 1) + stops.length) % stops.length].focus();
+  }
+});
+function startDesktop() {
+  $("quit").hidden = false;
+  // The server stops itself after IDLE_EXIT_MIN without requests; keep pinging even when the tab is hidden (long jobs).
+  pingTimer = setInterval(() => { if (!stopped) fetch("/api/ping", { headers: headers() }).catch(() => {}); }, 60000);
+}
+
 fetch("/api/config").then((r) => r.json()).then((c) => {
   maxMb = c.max_upload_mb;
+  if (c.desktop) startDesktop();
   if (c.auth_required && !token) $("auth").hidden = false;
 }).catch(() => {});
 applyLang();

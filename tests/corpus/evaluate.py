@@ -9,7 +9,7 @@ tests/corpus/out/<label>/ (results.json, report.md, the EPUBs). The reference te
 text layer, which neither backend uses for text, so it is an independent baseline; image-only excerpts are scored
 against the text layer of the pages they were derived from.
 
-Metrics (all on normalised text: NFKC, lower case, intra-word hyphens and soft hyphens removed):
+Metrics (all on normalised text: NFKC, lower case, intra-word hyphens and soft hyphens removed; words are runs of letters):
   word_recall / word_precision  multiset overlap of alphabetic tokens, EPUB vs reference
   char_recall / char_precision  multiset overlap of letters and digits (catches lost accents, (cid:N) garbage)
   pre_share                     share of the text rendered as <pre> code blocks (should be ~0 outside programming books)
@@ -24,6 +24,15 @@ Metrics (all on normalised text: NFKC, lower case, intra-word hyphens and soft h
   pnum_leak                     page numbers left in the text (standalone blocks or glued to the neighbouring words), share
   outline / nav / chapters / headings, outline_match (share of outline titles found in the EPUB navigation)
   headings_per_page, chapters_per_100p  structure density; on scans, spurious headings from OCR size noise show up here
+  gt_chapters, ch_found, sec_found, ch_spurious
+                                hand-checked chapter list (manifest `chapters_gt`, IA scans): level-1 titles found in the EPUB
+                                navigation, level-2 titles found, and EPUB chapter files whose first heading is no GT title
+                                (beyond one front-matter file)
+  formula_imgs                  display formulas rendered as images (<img class="formula">); sub_sup: <sub>/<sup> elements
+                                (text metrics read <sub>/<sup> as separate tokens and a formula picture as its alt text)
+  crops, crop_bleed, crop_clip  formula pictures checked against pdfium's glyph boxes (the conversion worker records each crop):
+                                pictures crossed by a glyph of another line; pictures cutting one of the formula's own
+                                glyphs or with ink on a 1-px border row/column (crop_edge_ink alone in results.json)
   img_pdf / img_epub            distinct embedded images (>=48 px, not full-page scans) vs images in the EPUB
   epubcheck                     ERROR+FATAL count (java, or the pdftoepub-test Docker image), -1 when not run
   s_per_page, rss_mb            wall time per page and peak resident memory of the conversion process
@@ -52,7 +61,8 @@ XHTML = "{http://www.w3.org/1999/xhtml}"
 BLOCK_TAGS = {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "pre", "figcaption", "dt", "dd"}
 TERMINAL = tuple(".!?:;…»\"”’)]*")
 MARGIN = 0.08  # top/bottom share of the page height treated as header/footer zone
-ROMAN = re.compile(r"^(?=[ivxlcdm]{2,})m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$", re.I)  # "x" alone is a variable, not a folio
+# "x" alone is a variable and "dx" a differential, not folios: front-matter numbers stay below D
+ROMAN = re.compile(r"^(?=[ivxlc]{2,}$)c{0,3}(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$", re.I)
 
 
 # ---------------------------------------------------------------- text normalisation
@@ -66,14 +76,16 @@ def norm(text: str) -> str:
     text = re.sub("([" + "".join(SPACING_ACCENTS) + "])([a-zA-Z\u0131])",
                   lambda m: SPACING_ACCENTS[m.group(1)] and m.group(2).replace("\u0131", "i") + SPACING_ACCENTS[m.group(1)], text)
     text = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").replace("\r", "\n")
-    text = text.replace("\x02", "-\n").replace("\xad", "").replace("‐", "-").replace("‑", "-")
+    # pdfium marks a line-end hyphenation inside the word with U+FFFE ("continu\ufffeous"): the word continues
+    text = text.replace("\ufffe", "").replace("\x02", "-\n").replace("\xad", "").replace("‐", "-").replace("‑", "-")
     text = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", text)  # line-end hyphenation
     text = re.sub(r"(?<=\w)-(?=\w)", "", text)  # intra-word hyphens: "well-known" == "wellknown" on both sides
     return text.lower()
 
 
 def words(text: str) -> list[str]:
-    return [w for w in re.findall(r"\w+", norm(text)) if any(c.isalpha() for c in w)]
+    # letters only: "m1", "m 1" and "m<sub>1</sub>" are the same word whatever the extractor glues
+    return re.findall(r"[^\W\d_]+", norm(text))
 
 
 def chars(text: str) -> collections.Counter:
@@ -131,10 +143,12 @@ def reference(pdf: Path, pages: list[int] | None = None) -> dict:
         top, bottom = h * (1 - MARGIN), h * MARGIN
         margin = [(("top" if t >= top else "bottom"), txt) for l, b, r, t, txt in rects if b >= top or t <= bottom]
         body = [x for x in rects if not (x[1] >= top or x[3] <= bottom)]
-        narrow = [x for x in body if x[2] - x[0] < 0.45 * w]
+        # prose lines only: formula fragments and figure labels are narrow too (they made math pages "two-column")
+        prose = [x for x in body if len(x[4]) >= 25]
+        narrow = [x for x in prose if x[2] - x[0] < 0.45 * w]
         left = sum(1 for x in narrow if x[2] < 0.55 * w)
         right = sum(1 for x in narrow if x[0] > 0.45 * w)
-        twocol = left >= 8 and right >= 8 and (left + right) >= 0.6 * max(1, len(body))
+        twocol = left >= 8 and right >= 8 and (left + right) >= 0.6 * max(1, len(prose))
         n_img = 0
         for obj in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=3):
             try:
@@ -180,15 +194,26 @@ def read_epub(path: Path) -> dict:
     spine = [manifest[r.get("idref")].get("href") for r in opf.iterfind(".//o:spine/o:itemref", ns)]
     blocks: list[tuple[str, str, int]] = []  # (tag, text, chapter index)
     headings = collections.Counter()
-    n_img = 0
+    n_img = n_formula = n_subsup = 0
+    first_heads = []  # first heading of each content document
     for ci, href in enumerate(spine):
-        root = etree.fromstring(z.read(base + href))
+        raw = z.read(base + href)
+        # "x<sup>2</sup>" is "x" and "2" (as in the PDF text layer), not the word "x2"; a formula picture's text is its
+        # alt text (linearised), which readers and screen readers expose
+        raw = re.sub(rb"<(/?)(sub|sup)>", lambda m: b" <" + m.group(1) + m.group(2) + b"> ", raw)
+        raw = re.sub(rb'(<img class="formula"[^>]*?alt=")([^"]*)("[^>]*/>)', rb"\1\2\3<span> \2 </span>", raw)
+        root = etree.fromstring(raw)
+        if not href.endswith("nav.xhtml"):
+            first_heads.append(next(("".join(h.itertext()).strip() for h in root.iter(*(XHTML + f"h{i}" for i in range(1, 7)))), ""))
         for el in root.iter():
             if not isinstance(el.tag, str):
                 continue
             tag = el.tag.replace(XHTML, "")
             if tag == "img":
                 n_img += 1
+                n_formula += "formula" in (el.get("class") or "").split()
+            if tag in ("sub", "sup"):
+                n_subsup += 1
             if tag in BLOCK_TAGS:
                 anc = el.getparent()
                 nested = False
@@ -211,7 +236,8 @@ def read_epub(path: Path) -> dict:
             if n.get("{http://www.idpf.org/2007/ops}type") == "toc":
                 nav_titles = ["".join(a.itertext()).strip() for a in n.iter(XHTML + "a")]
     chapters = sum(1 for h in spine if not h.endswith("nav.xhtml"))
-    return {"blocks": blocks, "headings": dict(headings), "images": n_img, "nav": nav_titles, "chapters": chapters}
+    return {"blocks": blocks, "headings": dict(headings), "images": n_img, "nav": nav_titles, "chapters": chapters,
+            "first_heads": first_heads, "formula_imgs": n_formula, "sub_sup": n_subsup}
 
 
 # ---------------------------------------------------------------- metrics
@@ -225,7 +251,35 @@ def is_pnum(text: str) -> bool:
     return bool(t) and (t.isdigit() or bool(ROMAN.match(t))) and len(t) <= 6
 
 
-def metrics(ref: dict, ep: dict) -> dict:
+def title_key(text: str) -> str:
+    text = re.sub(r"^\s*(chapter|chapitre|part|partie|book|livre)?\s*[ivxlc\d]+\s*[.:—–-]\s*", "", norm(text))  # "II. The ..."
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z]", "", text)
+
+
+def same_title(a: str, b: str) -> bool:
+    import difflib
+
+    a, b = title_key(a), title_key(b)
+    if len(a) < 3 or len(b) < 3:
+        return False
+    short, long_ = sorted((a, b), key=len)
+    if short in long_ and len(short) >= 0.6 * len(long_):
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
+
+
+def chapter_metrics(gt: dict, ep: dict) -> dict:
+    l1, l2 = [g["title"] for g in gt["level1"]], [g["title"] for g in gt.get("level2", [])]
+    nav = ep["nav"]
+    found = sum(1 for t in l1 if any(same_title(t, n) for n in nav))
+    sec = sum(1 for t in l2 if any(same_title(t, n) for n in nav))
+    stray = sum(1 for h in ep["first_heads"] if not any(same_title(t, h) for t in l1 + l2))
+    return {"gt_chapters": len(l1), "ch_found": found, "sec_found": sec if l2 else None, "gt_sections": len(l2),
+            "ch_spurious": max(0, stray - 1)}
+
+
+def metrics(ref: dict, ep: dict, gt: dict | None = None) -> dict:
     pages = ref["pages"]
     ref_text = "\n".join(p["body"] + "\n" + "\n".join(t for _, t in p["margin"]) for p in pages)
     out_text = "\n".join(b[1] for b in ep["blocks"])
@@ -349,6 +403,10 @@ def metrics(ref: dict, ep: dict) -> dict:
         m["outline_match"] = None
     m["img_pdf"] = sum(p["images"] for p in pages)
     m["img_epub"] = ep["images"]
+    m["formula_imgs"] = ep["formula_imgs"]
+    m["sub_sup"] = ep["sub_sup"]
+    if gt:
+        m.update(chapter_metrics(gt, ep))
     return m
 
 
@@ -383,8 +441,11 @@ def epubcheck(epub: Path, mode: str) -> int:
 # ---------------------------------------------------------------- conversion worker
 
 def worker(pdf: str, epub: str, ocr: str, langs: str) -> None:
+    if os.environ.get("PDFTOEPUB_EVAL_SRC"):  # --src: measure another checkout's code (e.g. main) without reinstalling
+        sys.path.insert(0, os.environ["PDFTOEPUB_EVAL_SRC"])
     import pdftoepub
 
+    crops = probe_crops()
     t0 = time.perf_counter()
     try:
         res = pdftoepub.convert(pdf, epub, pdftoepub.api.ConvertOptions(ocr=ocr, ocr_langs=langs))
@@ -392,11 +453,106 @@ def worker(pdf: str, epub: str, ocr: str, langs: str) -> None:
     except Exception as e:  # noqa: BLE001
         out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     out["seconds"] = time.perf_counter() - t0
+    if crops is not None:
+        Path(epub + ".crops.json").write_text(json.dumps(crops))
     print("RESULT " + json.dumps(out))
 
 
-def run_worker(doc: dict, pdf: Path, epub: Path, backend: str, timeout: int) -> dict:
+def probe_crops() -> list | None:
+    """Record where each formula picture was cropped (page, crop rectangle, box of the formula's own glyphs, in the
+    backend's page coordinates) so that the main process can check the crops against pdfium's glyph boxes."""
+    try:
+        from pdftoepub.core import formulas
+    except ImportError:  # a checkout without formula pictures
+        return None
+    crops: list = []
+    orig = formulas._formula
+
+    def probe(pieces, page, *a, **k):
+        r = orig(pieces, page, *a, **k)
+        if isinstance(r, formulas.ImageItem):
+            own = [p for p in pieces if p.text.strip() not in {r.label, r.lead} - {""}]
+            crops.append({"iid": r.image_id, "page": page.number, "size": [page.width, page.height], "rect": list(r.bbox),
+                          "ink": [min(p.x0 for p in own), min(p.y0 for p in own), max(p.x1 for p in own), max(p.y1 for p in own)]})
+        return r
+
+    formulas._formula = probe
+    return crops
+
+
+def crop_check(pdf: Path, epub: Path) -> dict:
+    """Formula pictures against pdfium's glyph boxes and their own pixels:
+    crop_bleed  pictures crossed by a glyph of another line (a glyph whose centre is outside the formula's own box)
+    crop_clip   pictures cutting one of the formula's own glyphs, or with ink on a 1-px border row/column."""
+    side = Path(str(epub) + ".crops.json")
+    if not side.exists():
+        return {}
+    import io
+
+    import pypdfium2 as pdfium
+    from PIL import Image
+
+    crops = json.loads(side.read_text())
+    z = zipfile.ZipFile(epub)
+    names = {Path(n).stem: n for n in z.namelist() if n.startswith("OEBPS/images/")}
+    doc = pdfium.PdfDocument(str(pdf))
+    tol = 0.3  # points (0.8 px at 200 dpi)
+    bleed = clip = border = 0
+    seen: set = set()
+    examples = []
+    glyphs: dict[int, list] = {}
+    for c in crops:
+        if c["iid"] in seen or c["iid"] not in names:
+            continue
+        seen.add(c["iid"])
+        pno = c["page"]
+        page = doc[pno - 1]
+        if pno not in glyphs:
+            tp = page.get_textpage()
+            glyphs[pno] = [tp.get_charbox(i) for i in range(tp.count_chars()) if not tp.get_text_range(i, 1).isspace()]
+            tp.close()
+        # page coordinates (top-left origin) of whichever box the backend measured from: media box (pdfminer) or crop box
+        # (get_bbox: the effective crop box; get_mediabox/get_cropbox fall back to Letter when the box is inherited)
+        w, h = c["size"]
+        boxes = [page.get_bbox(), page.get_mediabox()]
+        bx = min(boxes, key=lambda b: abs((b[2] - b[0]) - w) + abs((b[3] - b[1]) - h))
+
+        def conv(r):
+            return (r[0] + bx[0], bx[3] - r[3], r[2] + bx[0], bx[3] - r[1])  # -> PDF user space (l, b, r, t)
+
+        cl, cb, cr, ct = conv(c["rect"])
+        il, ib, ir_, it = conv(c["ink"])
+        bad_bleed = bad_clip = False
+        for gl, gb, gr, gt in glyphs[pno]:
+            if min(gr, cr) - max(gl, cl) <= tol or min(gt, ct) - max(gb, cb) <= tol:
+                continue  # does not reach into the crop
+            mx, my = (gl + gr) / 2, (gb + gt) / 2
+            # the formula's own glyph: inside its glyph boxes, or inside the crop on its rows (CMEX parentheses have
+            # glyphs in pdfium's text layer but no text in the backends, so no box of their own)
+            if ib - 0.5 <= my <= it + 0.5 and (il - 0.5 <= mx <= ir_ + 0.5 or cl <= mx <= cr):
+                if gl < cl - tol or gr > cr + tol or gb < cb - tol or gt > ct + tol:
+                    bad_clip = True
+            else:
+                bad_bleed = True
+        page.close()
+        im = Image.open(io.BytesIO(z.read(names[c["iid"]]))).convert("L")
+        px = im.load()
+        W, H = im.size
+        edge = [px[x, 0] for x in range(W)] + [px[x, H - 1] for x in range(W)] + [px[0, y] for y in range(H)] + [px[W - 1, y] for y in range(H)]
+        inked = min(edge) < 160
+        border += inked
+        bleed += bad_bleed
+        clip += bad_clip or inked
+        if (bad_bleed or bad_clip or inked) and len(examples) < 8:
+            examples.append(f"{c['iid']} p{pno}" + " bleed" * bad_bleed + " clip" * bad_clip + " edge-ink" * inked)
+    doc.close()
+    return {"crops": len(seen), "crop_bleed": bleed, "crop_clip": clip, "crop_edge_ink": border, "crop_examples": examples}
+
+
+def run_worker(doc: dict, pdf: Path, epub: Path, backend: str, timeout: int, src: str | None = None) -> dict:
     env = dict(os.environ, PDFTOEPUB_BACKEND=backend)
+    if src:
+        env["PDFTOEPUB_EVAL_SRC"] = str(Path(src).resolve())
     cmd = [sys.executable, "-I", str(Path(__file__)), "--worker", str(pdf), str(epub), doc.get("ocr", "auto"), doc.get("ocr_langs", "fra+eng")]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     deadline = time.time() + timeout
@@ -424,7 +580,8 @@ def run_worker(doc: dict, pdf: Path, epub: Path, backend: str, timeout: int) -> 
 
 HEAD = ["doc", "backend", "pages", "word_recall", "word_precision", "char_recall", "pre_share", "pua", "order", "order_2col", "mid_breaks",
         "hyph_left", "hyph_joined", "hdr_leak", "pnum_leak", "outline", "nav", "chapters", "headings", "outline_match",
-        "headings_per_page", "chapters_per_100p", "img_pdf", "img_epub", "epubcheck", "s_per_page", "rss_mb"]
+        "headings_per_page", "chapters_per_100p", "gt_chapters", "ch_found", "sec_found", "ch_spurious", "img_pdf", "img_epub",
+        "formula_imgs", "crops", "crop_bleed", "crop_clip", "sub_sup", "epubcheck", "s_per_page", "rss_mb"]
 
 
 def fmt(v) -> str:
@@ -511,6 +668,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--timeout", type=int, default=1800, help="per conversion, seconds")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
     ap.add_argument("--rescore", action="store_true", help="recompute metrics from the label's existing EPUBs (no conversion)")
+    ap.add_argument("--src", help="directory holding the `pdftoepub` package to measure (default: the installed one), "
+                                  "e.g. a `git archive main src | tar -x` export")
     ap.add_argument("--worker", nargs=4, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     if args.worker:
@@ -555,10 +714,11 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 res = {k: old[k] for k in ("ok", "pages", "chapters", "ocr_pages", "warnings", "seconds", "rss_mb")}
             else:
-                res = run_worker(doc, pdf, epub, be, args.timeout)
+                res = run_worker(doc, pdf, epub, be, args.timeout, args.src)
             row = {"doc": doc["id"], "backend": be, **res}
             if res.get("ok"):
-                row.update(metrics(ref, read_epub(epub)))
+                row.update(metrics(ref, read_epub(epub), doc.get("chapters_gt")))
+                row.update(crop_check(pdf, epub))
                 row["epubcheck"] = old.get("epubcheck", -1) if args.rescore else epubcheck(epub, args.epubcheck)
                 row["s_per_page"] = res["seconds"] / max(1, res["pages"])
                 print(f"ok {res['seconds']:.1f}s rss={res['rss_mb']}MB recall={row['word_recall']:.3f} order={fmt(row['order'])} "

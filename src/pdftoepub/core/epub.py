@@ -36,6 +36,9 @@ pre { white-space: pre-wrap; font-family: monospace; font-size: 0.9em; line-heig
 pre code { font-size: 1em; }
 code { font-family: monospace; font-size: 0.92em; overflow-wrap: anywhere; }
 sup, sub { font-size: 0.75em; line-height: 0; }
+span.dmath { display: block; text-align: center; text-indent: 0; margin: 0.6em 0; }
+img.formula { vertical-align: middle; max-width: 100%; height: auto; }
+span.eqno { margin-left: 1.5em; white-space: nowrap; }
 hr { border: 0; border-top: 0.06em solid; margin: 2em 0 1em 0; }
 section.footnotes { font-size: 0.9em; }
 section.footnotes p { margin: 0 0 0.4em 0; }
@@ -83,6 +86,13 @@ class Writer:
         i = 0
         while i < len(runs):
             r = runs[i]
+            if r.display:  # a display formula: one centred block (picture or text, then its number)
+                j = i
+                while j < len(runs) and runs[j].display == r.display:
+                    j += 1
+                out.append(f'<span class="dmath">{"".join(self._math(x) for x in runs[i:j])}</span>')
+                i = j
+                continue
             if r.link and r.noteref is None:
                 j = i
                 grp = []
@@ -97,6 +107,17 @@ class Writer:
             out.append(self._styled(r))
             i += 1
         return "".join(out)
+
+    def _math(self, r: Run) -> str:
+        if r.image:
+            src = self.image_files.get(r.image[0])
+            if not src:
+                return esc(r.text)
+            width = f' style="width:{r.image[1]:.2f}em"' if r.image[1] else ""
+            return f'<img class="formula" src="{attr(src)}" alt="{attr(r.text)}"{width}/>'
+        if r.eqno:
+            return f'<span class="eqno">{esc(r.text)}</span>'
+        return self._styled(r)
 
     def _href(self, link) -> str | None:
         if link[0] == "url":

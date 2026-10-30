@@ -21,6 +21,7 @@ class Span:
     mono: bool = False
     bbox: Rect = (0, 0, 0, 0)
     link: tuple | None = None  # ("url", href) | ("page", page_no, y)
+    math: bool = False  # set in a math font (CMMI, CMSY, CMEX, STIX Math, Cambria Math, ...)
 
 
 @dataclass
@@ -28,6 +29,7 @@ class Line:
     spans: list[Span]
     bbox: Rect
     page: int = 0
+    kind: str = ""  # "dmath": a one-row display formula kept as text (its own block, joined to the sentence)
 
     @property
     def text(self) -> str:
@@ -95,8 +97,12 @@ class ImageItem:
     bbox: Rect
     image_id: str  # key into PageData/Document.images
     page: int = 0
-    kind: str = "image"  # "image" | "figure" (rasterised vector region) | "scan"
+    kind: str = "image"  # "image" | "figure" (rasterised vector region) | "scan" | "formula" (display math region)
     xref: int = 0
+    alt: str = ""  # formula: linearised text
+    label: str = ""  # formula: equation number, kept as text ("(12)")
+    lead: str = ""  # formula: a connecting word printed beside it ("or", "and"), emitted before it
+    width_em: float = 0.0  # formula: printed width in body-text ems (the image scales with the reader's font size)
 
 
 @dataclass
@@ -145,6 +151,9 @@ class Run:
     mono: bool = False
     link: tuple | None = None
     noteref: str | None = None  # footnote id this run points to
+    display: int = 0  # > 0: part of display formula number n (consecutive runs form one centred block)
+    image: tuple | None = None  # (image_id, width_em): a formula picture; `text` is its alt text
+    eqno: bool = False  # equation number of a display formula
 
 
 @dataclass

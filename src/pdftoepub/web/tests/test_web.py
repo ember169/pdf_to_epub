@@ -62,7 +62,7 @@ def post(c, data=PDF, name="My Book.pdf", options=None, headers=None):
 
 
 def test_healthz_and_front(client):
-    assert client.get("/healthz").json() == {"ok": True}
+    assert client.get("/healthz").json()["ok"] is True
     assert "PDF" in client.get("/").text
 
 

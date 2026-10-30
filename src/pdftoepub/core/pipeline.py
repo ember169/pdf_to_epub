@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 
 from ..api import ConversionError, ConvertOptions, ConvertResult, ProgressCb, ProgressEvent
-from . import layout, ocr, structure
+from . import formulas, layout, ocr, openings, structure
 from .backends import get_backend
 from .backends.common import ImageStore, cover_from_pil, limit_pillow, page_text_quality
 from .epub import write_epub
@@ -132,6 +132,14 @@ def _extract_all(doc, options: ConvertOptions, progress, warnings: list[str], st
                     ocr_pages += 1
         elif scan and nchars >= 150:
             pd.images = [im for im in pd.images if im.kind != "scan"]  # searchable scan: the text layer is the content
+        if pd.source == "native" and options.image_mode != "none":
+            def render(rect, dpi, pno=pno):
+                with lock:
+                    return doc.render_region(pno, rect, dpi, gray=True)
+            try:
+                formulas.process_page(pd, render, store)
+            except Exception:  # noqa: BLE001 - formulas then stay as plain text lines
+                pass
         pages.append(pd)
     if skipped_ocr:
         warnings.append(f"{skipped_ocr} page(s) have no usable text layer and OCR is unavailable; scanned page images were kept instead.")
@@ -192,8 +200,9 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
     for p in pages:
         if p.source == "ocr" or p.ocr_layer:
             layout.snap_ocr_sizes(p)
+    running: Counter = Counter()
     if options.drop_headers_footers:
-        layout.remove_running(pages, warnings)
+        layout.remove_running(pages, warnings, running)
     ctx = layout.compute_ctx(pages, options.detect_columns)
     layout.drop_ocr_noise(pages, ctx)
 
@@ -213,7 +222,13 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
         raise ConversionError("No readable text was found in this PDF.")
 
     model = structure.build_heading_model(raw, ctx)
-    blocks, footnotes = structure.convert_blocks(raw, ctx, notes, model)
+    toc = structure.clean_toc(toc_raw, n)
+    plan = None
+    if not toc:  # scanned books: chapters from the page layout and the printed table of contents
+        plan = openings.plan(raw, pages, ctx, running, structure.clean_text_field(options.title)
+                             or structure.clean_meta_title(meta.get("title")) or "")
+    blocks, footnotes = structure.convert_blocks(raw, ctx, notes, model, plan)
+    blocks = structure.inline_display_math(blocks)
     blocks = structure.merge_across_breaks(blocks, ctx)
     blocks = structure.merge_code_blocks(blocks)
     blocks = structure.group_lists(blocks)
@@ -230,7 +245,6 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
     sample = " ".join(structure.plain(b.runs) for b in blocks if isinstance(b, Paragraph))[:30000]
     lang = options.language if options.language and _LANG_OK.match(options.language) else structure.detect_language(sample)
 
-    toc = structure.clean_toc(toc_raw, n)
     chapters = structure.build_chapters(blocks, toc, n, title, warnings)
     structure.resolve_links(chapters)
     _attach_orphan_notes(chapters, footnotes)
@@ -238,6 +252,7 @@ def _run(pdf_path: Path, epub_path: Path, options: ConvertOptions, progress: Pro
     # ------------------------------------------------------------------ build
     _emit(progress, "build", n, n, "Writing EPUB")
     used = {b.image_id for ch in chapters for b in ch.blocks if isinstance(b, Figure)}
+    used |= {r.image[0] for ch in chapters for b in ch.blocks if isinstance(b, Paragraph) for r in b.runs if r.image}
     images = {k: v for k, v in store.assets.items() if k in used}
     doc_ir = Document(title, author, lang, chapters, images, cover, warnings)
     ident = "urn:uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, _fingerprint(pdf_path) + "|" + title))

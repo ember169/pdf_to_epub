@@ -9,6 +9,7 @@ Apache License 2.0 - https://github.com/tesseract-ocr/tesseract/blob/main/LICENS
 == Leptonica and image libraries linked by Tesseract (libpng, libjpeg, libtiff, zlib, libwebp, openjpeg, giflib, ...) ==
 Leptonica: BSD 2-clause - https://github.com/DanBloomberg/leptonica/blob/master/leptonica-license.txt
 The other libraries keep their own permissive licenses (libpng, IJG/BSD, libtiff, zlib, BSD-3, MIT-like).
+macOS builds: tesseract/LICENSES.txt next to the executable holds the full Tesseract, Leptonica and libpng texts.
 == tessdata_fast eng/fra traineddata ==
 Apache License 2.0 - https://github.com/tesseract-ocr/tessdata_fast/blob/main/LICENSE
 """

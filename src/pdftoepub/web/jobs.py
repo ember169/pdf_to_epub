@@ -277,6 +277,23 @@ class JobManager:
             self._cond.notify_all()
         return True
 
+    def cancel_all(self) -> int:
+        """Desktop quit: cancel every queued/running job and kill the spawned conversion children now."""
+        import multiprocessing
+
+        n = 0
+        with self._lock:
+            for d in self.root.iterdir() if self.root.is_dir() else ():
+                st = self.get(d.name) if d.is_dir() else None
+                if st and st.get("status") in ("queued", "running"):
+                    self._cancelled.add(d.name)
+                    n += 1
+        self.pool.shutdown(wait=False, cancel_futures=True)
+        for child in multiprocessing.active_children():
+            if child.name == "pdftoepub-convert":
+                child.kill()
+        return n
+
     def recover(self) -> None:
         """After a restart: requeue queued jobs whose input remains; fail interrupted ones."""
         self.root.mkdir(parents=True, exist_ok=True)

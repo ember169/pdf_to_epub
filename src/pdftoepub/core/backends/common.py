@@ -136,6 +136,19 @@ def fix_spacing_accents(t: str) -> str:
     return _ACCENT_RE.sub(sub, t)
 
 
+# math fonts: TeX (CM / AMS / Euler / txfonts / newtx / Latin Modern Math), STIX, Cambria Math, MathJax, MathTime,
+# Adobe Symbol. Body digits and operators often come from the text font, so this flags only part of a formula.
+MATH_FONT_RE = re.compile(
+    r"^(cmmi|cmbsy|cmsy|cmex|cmmib|msam|msbm|eufm|eufb|eusm|eusb|eurm|eurb|rsfs|wasy|esint|stmary|txsy|txex|txmi|"
+    r"pxsy|pxex|pxmi|ntxmi|ntxsy|ntxexx|zxmi|rtxmi|lmmath|latinmodernmath|stix\w*math|stixmath|cambriamath|mathjax|"
+    r"xits\w*math|asanamath|mtsy|mtex|mtmi|tex-cm(ex|sy|mi)|symbol(mt)?$)", re.I)
+
+
+def is_math_font(font: str) -> bool:
+    name = re.sub(r"[\s_-]", "", font.split("+")[-1])
+    return bool(MATH_FONT_RE.match(name))
+
+
 def is_ocr_font(font: str) -> bool:
     """Invisible text layers written by Tesseract (Internet Archive, OCRmyPDF) use GlyphLessFont, flagged fixed-pitch."""
     return "glyphless" in font.lower()

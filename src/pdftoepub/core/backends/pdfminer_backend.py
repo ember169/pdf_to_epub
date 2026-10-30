@@ -31,7 +31,7 @@ from .base import PDFIUM_LOCK, PdfBackend, PdfDocument
 from .common import MAX_DECODE_PIXELS as _MAX_DECODE
 from .common import (CID_RE, MAX_IMAGE_DIM, ImageStore, asset_from_pil, clamp_scale, clean_text, cluster_rects,
                      figures_from_clusters, fix_spacing_accents, is_ocr_font, map_pua, merge_row_fragments,
-                     ruled_tables_from_segments, style_from_name)
+                     is_math_font, ruled_tables_from_segments, style_from_name)
 
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 MAX_CLUSTER_RECTS = 1500
@@ -266,7 +266,7 @@ class PdfMinerDocument(PdfDocument):
             raise RuntimeError("pypdfium2 could not open this PDF")
         key = (pno, round(dpi), gray, native)
         if self._render_cache and self._render_cache[0] == key:
-            self.last_scale = self._render_cache[2]
+            self.last_scale, self.last_box = self._render_cache[2], self._render_cache[3]
             return self._render_cache[1]
         extra = (-self.orig_rotate[pno - 1]) % 360 if native else 0
         w, h, _, _ = self._page_dims(self.pages[pno - 1])
@@ -276,14 +276,17 @@ class PdfMinerDocument(PdfDocument):
         with PDFIUM_LOCK:
             page = self.pdfium[pno - 1]
             try:
+                box = None
+                with suppress(Exception):
+                    box = tuple(page.get_bbox())  # what pdfium renders: the (possibly inherited) crop box
                 bm = page.render(scale=scale, grayscale=gray, rotation=extra)
                 img = _copy_and_free(bm)
             finally:
                 page.close()
         if gray and img.mode != "L":
             img = img.convert("L")
-        self._render_cache = (key, img, scale)
-        self.last_scale = scale
+        self._render_cache = (key, img, scale, box)
+        self.last_scale, self.last_box = scale, box
         return img
 
     def render_page(self, pno: int, dpi: float, gray: bool = False):
@@ -291,14 +294,24 @@ class PdfMinerDocument(PdfDocument):
         self._render_cache = None  # large OCR renders are not kept
         return img
 
-    def _render_region(self, pno: int, rect, dpi: int = 200):
+    def _render_region(self, pno: int, rect, dpi: int = 200, gray: bool = False):
         img = self._render_full(pno, dpi, False, native=True)
         s = self.last_scale  # the scale actually used (clamped for huge pages)
+        # analysis coordinates start at the media box's top-left corner, the rendering at the crop box's: shift by the
+        # difference (Project Gutenberg PDFs crop 20 pt off each side); rotated pages keep the plain mapping
+        dx = dy = 0.0
+        if self.last_box and not self.orig_rotate[pno - 1] % 360:
+            w, h, mx0, my0 = self._page_dims(self.pages[pno - 1])
+            dx, dy = mx0 - self.last_box[0], self.last_box[3] - (my0 + h)
+        rect = (rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy)
         box = (int(rect[0] * s), int(rect[1] * s), int(rect[2] * s), int(rect[3] * s))
         box = (max(box[0], 0), max(box[1], 0), min(box[2], img.width), min(box[3], img.height))
         if box[2] - box[0] < 4 or box[3] - box[1] < 4:
             return None
-        return asset_from_pil(img.crop(box).convert("RGB"))
+        return asset_from_pil(img.crop(box).convert("L" if gray else "RGB"))
+
+    def render_region(self, pno: int, rect, dpi: int = 200, gray: bool = False):
+        return self._render_region(pno, rect, dpi, gray)
 
     def note(self, msg: str) -> None:
         if msg not in self.warnings:
@@ -480,7 +493,9 @@ class PdfMinerDocument(PdfDocument):
                 boxes.append((x0, H - getattr(ref, "baseline_y", ref.matrix[5]) - maxsize, x0, H - getattr(ref, "baseline_y", ref.matrix[5])))
                 prev_x1 = x1
                 continue
+            math = False
             if txt.strip():
+                math = is_math_font(str(it.fontname))
                 small = it.size < 0.86 * maxsize
                 oy = getattr(it, 'baseline_y', it.matrix[5])
                 sup = small and oy >= base + 0.12 * maxsize
@@ -513,13 +528,13 @@ class PdfMinerDocument(PdfDocument):
                     if lx0 <= cx <= lx1 and ly0 <= cy <= ly1:
                         link = target
                         break
-            key = (round(it.size, 1), bold, italic, sup, sub, mono, link) if txt.strip() else cur_key
+            key = (round(it.size, 1), bold, italic, sup, sub, mono, link, math) if txt.strip() else cur_key
             if cur is None or key != cur_key:
                 if not txt.strip() and cur is not None:
                     cur.text += txt
                     continue
                 cur_key = key
-                cur = Span(txt, float(it.size), bold, italic, sup, sub, mono, bb, link)
+                cur = Span(txt, float(it.size), bold, italic, sup, sub, mono, bb, link, math)
                 spans.append(cur)
             else:
                 cur.text += txt
