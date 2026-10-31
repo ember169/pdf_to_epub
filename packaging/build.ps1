@@ -19,10 +19,10 @@ Push-Location packaging
 & "..\$v\pyinstaller" --noconfirm --clean --distpath ..\build\out --workpath ..\build\work pdftoepub.spec
 Pop-Location
 New-Item -ItemType Directory -Force dist | Out-Null
-Move-Item -Force build\out\pdftoepub.exe dist\pdftoepub-windows-x86_64.exe
-$list = & "$v\pyi-archive_viewer" -l -r dist\pdftoepub-windows-x86_64.exe
+Move-Item -Force build\out\pdftoepub.exe dist\pdf_to_epub-windows-x86_64.exe
+$list = & "$v\pyi-archive_viewer" -l -r dist\pdf_to_epub-windows-x86_64.exe
 if (($list | Measure-Object).Count -lt 100 -or ($list | Select-String -Pattern "pymupdf|fitz")) { throw "PyMuPDF found or archive unreadable" }
 Remove-Item -Recurse -Force build
-$h = (Get-FileHash dist\pdftoepub-windows-x86_64.exe -Algorithm SHA256).Hash.ToLower()
-"$h  pdftoepub-windows-x86_64.exe" | Add-Content dist\SHA256SUMS-windows.txt
+$h = (Get-FileHash dist\pdf_to_epub-windows-x86_64.exe -Algorithm SHA256).Hash.ToLower()
+"$h  pdf_to_epub-windows-x86_64.exe" | Add-Content dist\SHA256SUMS-windows.txt
 Get-Content dist\SHA256SUMS-windows.txt

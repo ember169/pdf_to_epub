@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Local portable builds (no CI). Usage: packaging/build.sh [mac|mac-arm64] [mac-x86_64] [linux-arm64] [linux-x86_64] [windows]
-# Output in dist/: pdftoepub-<os>-<arch> and SHA256SUMS.  Windows: use packaging/build.ps1 on a Windows machine.
+# Output in dist/: pdf_to_epub-<os>-<arch> and SHA256SUMS.  Windows: use packaging/build.ps1 on a Windows machine.
 # macOS output is a self-extracting launcher around a PyInstaller folder build (see make_sfx).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -73,7 +73,7 @@ mac_tess() {  # $1 arch -> prints TESS_DIR (or nothing)
 build_mac() {  # $1 = arm64 | x86_64 (x86_64 runs under Rosetta on Apple silicon)
   [ "$(uname -s)" = Darwin ] || { echo "mac target needs macOS"; return 1; }
   local arch=${1:-arm64} uvarch=aarch64; [ "$arch" = x86_64 ] && uvarch=x86_64
-  local name="pdftoepub-macos-$arch" W=$ROOT/build/mac-$arch v=$ROOT/packaging/.buildvenv-$arch
+  local name="pdf_to_epub-macos-$arch" W=$ROOT/build/mac-$arch v=$ROOT/packaging/.buildvenv-$arch
   local A=(arch "-$arch")
   rm -rf "$W" "$v"; mkdir -p "$W"
   # python-build-standalone CPython (via uv): per-arch, built for macOS 11+, unlike Homebrew's Python
@@ -97,14 +97,14 @@ build_mac() {  # $1 = arm64 | x86_64 (x86_64 runs under Rosetta on Apple silicon
     "${A[@]}" "$v/bin/pyinstaller" --noconfirm --clean --distpath "$W/out" --workpath "$W/work" pdftoepub.spec) >"$W/pyinstaller.log" 2>&1 \
     || { tail -20 "$W/pyinstaller.log"; exit 1; }
   find "$W/out" \( -iname "*pymupdf*" -o -iname "fitz*" \) | grep . && { echo "ERROR: PyMuPDF files present"; exit 1; }
-  [ -n "$(find "$W/out/pdftoepub.app" -name large_fr.msgpack.gz)" ] || { echo "ERROR: wordfreq lexicon not bundled"; exit 1; }
+  [ -n "$(find "$W/out/pdf_to_epub.app" -name large_fr.msgpack.gz)" ] || { echo "ERROR: wordfreq lexicon not bundled"; exit 1; }
   lipo -archs "$W/out/pdftoepub/pdftoepub" | grep -qw "$arch" || { echo "ERROR: wrong architecture"; exit 1; }
-  packaging/audit_minos.sh "$W/out/pdftoepub.app" "${MAC_MIN_OS:-12.0}" || [ -n "${ALLOW_NEWER_MACOS:-}" ] \
+  packaging/audit_minos.sh "$W/out/pdf_to_epub.app" "${MAC_MIN_OS:-12.0}" || [ -n "${ALLOW_NEWER_MACOS:-}" ] \
     || { echo "ERROR: some code needs a newer macOS than ${MAC_MIN_OS:-12.0} (ALLOW_NEWER_MACOS=1 to accept)"; exit 1; }
   # sign the CLI payload BEFORE packing it, so the code extracted on users' machines is already signed
   packaging/sign_macos.sh payload "$W/out/pdftoepub"
   make_sfx "$W/out/pdftoepub" "dist/$name"
-  packaging/sign_macos.sh app "$W/out/pdftoepub.app" "dist/$name.dmg"
+  packaging/sign_macos.sh app "$W/out/pdf_to_epub.app" "dist/$name.dmg"
   cp "$W/THIRD_PARTY_LICENSES" dist/THIRD_PARTY_LICENSES
   echo "OK: dist/$name (CLI) + dist/$name.dmg (app), no PyMuPDF inside, $([ -n "$tess" ] && echo "with bundled OCR" || echo "WITHOUT bundled OCR")"
 }
@@ -113,18 +113,18 @@ build_linux() {  # $1 = arm64 | x86_64
   local arch=$1 plat=linux/arm64; [ "$arch" = x86_64 ] && plat=linux/amd64
   docker build --platform "$plat" -f packaging/Dockerfile.linux --target out \
     --output "type=local,dest=build/linux-$arch" .
-  mv "build/linux-$arch/pdftoepub" "dist/pdftoepub-linux-$arch"; chmod +x "dist/pdftoepub-linux-$arch"
+  mv "build/linux-$arch/pdftoepub" "dist/pdf_to_epub-linux-$arch"; chmod +x "dist/pdf_to_epub-linux-$arch"
   cp "build/linux-$arch/THIRD_PARTY_LICENSES" dist/THIRD_PARTY_LICENSES
   echo "glibc minimum: tesseract bundle $(cat build/linux-$arch/glibc_tess_min), bootloader $(cat build/linux-$arch/glibc_bootloader_min)"
   rm -rf "build/linux-$arch"
-  echo "OK: pdftoepub-linux-$arch built"
+  echo "OK: pdf_to_epub-linux-$arch built"
 }
 
 build_windows() {  # experimental: PyInstaller + Windows Python + Windows Tesseract under Wine in Docker (linux/amd64)
   docker build --platform linux/amd64 -f packaging/Dockerfile.windows --target out --output type=local,dest=build/win .
-  mv build/win/pdftoepub.exe dist/pdftoepub-windows-x86_64.exe; cp build/win/THIRD_PARTY_LICENSES dist/THIRD_PARTY_LICENSES; rm -rf build/win
+  mv build/win/pdftoepub.exe dist/pdf_to_epub-windows-x86_64.exe; cp build/win/THIRD_PARTY_LICENSES dist/THIRD_PARTY_LICENSES; rm -rf build/win
   docker build -q --platform linux/amd64 -f packaging/Dockerfile.windows --target base -t pte-winbase . >/dev/null  # image used by smoke.sh
-  echo "OK: pdftoepub-windows-x86_64.exe built (under Wine)"
+  echo "OK: pdf_to_epub-windows-x86_64.exe built (under Wine)"
 }
 
 # wordfreq lexicons (glued-word splitter), fetched once into src/ (pinned, sha256-checked; no-op when present): the
@@ -133,4 +133,4 @@ python3 src/pdftoepub/core/lexicon.py fetch >/dev/null || { echo "cannot fetch t
 for t in "${TARGETS[@]}"; do
   case $t in mac|mac-arm64) build_mac arm64;; mac-x86_64) build_mac x86_64;; linux-arm64) build_linux arm64;; linux-x86_64) build_linux x86_64;; windows) build_windows;; *) echo "unknown target $t"; exit 1;; esac
 done
-(cd dist && : > SHA256SUMS && for f in pdftoepub-*; do case $f in *.zip|*-dir) ;; *) shasum -a 256 "$f" >> SHA256SUMS;; esac; done; cat SHA256SUMS)
+(cd dist && : > SHA256SUMS && for f in pdf_to_epub-*; do case $f in *.zip|*-dir) ;; *) shasum -a 256 "$f" >> SHA256SUMS;; esac; done; cat SHA256SUMS)

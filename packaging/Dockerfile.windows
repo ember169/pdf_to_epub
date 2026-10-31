@@ -1,4 +1,4 @@
-# EXPERIMENTAL: builds pdftoepub-windows-x86_64.exe with Wine inside Docker (linux/amd64).
+# EXPERIMENTAL: builds pdf_to_epub-windows-x86_64.exe with Wine inside Docker (linux/amd64).
 #   docker build --platform linux/amd64 -f packaging/Dockerfile.windows --target out --output type=local,dest=DIR .
 # Pinned inputs (sha256-verified): CPython 3.12.10 from the official nuget.org "python" package, Tesseract 5.4.0
 # (UB-Mannheim official GitHub release installer, unpacked with 7z - never executed), tessdata_fast eng/fra.

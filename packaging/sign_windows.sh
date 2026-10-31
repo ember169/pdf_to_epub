@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Authenticode-sign the Windows .exe locally with osslsigncode (brew install osslsigncode), with an RFC 3161 timestamp.
 #
-#   sign_windows.sh [EXE]          default EXE: dist/pdftoepub-windows-x86_64.exe (signed in place)
+#   sign_windows.sh [EXE]          default EXE: dist/pdf_to_epub-windows-x86_64.exe (signed in place)
 #
 # Environment:
 #   WIN_SIGN_PFX        path to a .pfx/.p12 holding the code-signing certificate + private key (OV certificate).
@@ -12,7 +12,7 @@
 # Azure Trusted Signing (needs Microsoft's signtool/dlib on Windows).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-EXE=${1:-dist/pdftoepub-windows-x86_64.exe}
+EXE=${1:-dist/pdf_to_epub-windows-x86_64.exe}
 TSA=${WIN_SIGN_TSA:-http://timestamp.digicert.com}
 command -v osslsigncode >/dev/null || { echo "need osslsigncode (brew install osslsigncode)"; exit 1; }
 [ -f "$EXE" ] || { echo "no such file: $EXE"; exit 1; }
@@ -25,7 +25,7 @@ fi
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 PASSFILE=$TMP/pass; (umask 077; printf '%s' "$WIN_SIGN_PASSWORD" > "$PASSFILE")   # never on the command line
 osslsigncode sign -pkcs12 "$WIN_SIGN_PFX" -readpass "$PASSFILE" \
-  -n "pdftoepub" -h sha256 -ts "$TSA" \
+  -n "pdf_to_epub" -h sha256 -ts "$TSA" \
   -in "$EXE" -out "$TMP/signed.exe"
 mv "$TMP/signed.exe" "$EXE"
 echo "signed: $EXE"

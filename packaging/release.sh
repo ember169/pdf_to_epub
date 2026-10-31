@@ -20,8 +20,8 @@ while [ $# -gt 0 ]; do
 done
 [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { sed -n '2,8p' "$0"; exit 2; }
 
-ARTEFACTS=(pdftoepub-macos-arm64.dmg pdftoepub-macos-arm64 pdftoepub-macos-x86_64.dmg pdftoepub-macos-x86_64
-           pdftoepub-linux-arm64 pdftoepub-linux-x86_64 pdftoepub-windows-x86_64.exe)
+ARTEFACTS=(pdf_to_epub-macos-arm64.dmg pdf_to_epub-macos-arm64 pdf_to_epub-macos-x86_64.dmg pdf_to_epub-macos-x86_64
+           pdf_to_epub-linux-arm64 pdf_to_epub-linux-x86_64 pdf_to_epub-windows-x86_64.exe)
 for f in "${ARTEFACTS[@]}"; do [ -f "dist/$f" ] || { echo "missing dist/$f (run packaging/build.sh)"; exit 1; }; done
 VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' pyproject.toml | head -1)
 [ "v$VERSION" = "$TAG" ] || echo "WARNING: tag $TAG differs from pyproject.toml version $VERSION"
@@ -35,7 +35,7 @@ if [ -z "$NOTES" ]; then
     echo; echo '```'; cat dist/SHA256SUMS; echo '```'; } > "$NOTES"
 fi
 ls -l "${FILES[@]}"
-CMD=(gh release create "$TAG" "${FILES[@]}" --repo "$REPO" --title "pdftoepub $TAG" --notes-file "$NOTES")
+CMD=(gh release create "$TAG" "${FILES[@]}" --repo "$REPO" --title "pdf_to_epub $TAG" --notes-file "$NOTES")
 if [ -n "$PUBLISH" ]; then
   "${CMD[@]}"
 else

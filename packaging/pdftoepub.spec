@@ -36,10 +36,10 @@ if os.environ.get("ONEDIR"):
     coll = COLLECT(exe, a.binaries, a.datas, name="pdftoepub")
     if os.environ.get("MAC_APP"):  # double-clickable macOS app: no args -> web UI in the browser
         app = BUNDLE(
-            coll, name="pdftoepub.app", bundle_identifier="org.pdftoepub.app",
+            coll, name="pdf_to_epub.app", bundle_identifier="org.pdftoepub.app",
             icon=os.environ.get("MAC_ICON") or None, version=os.environ.get("APP_VERSION", "0.2.0"),
             info_plist={
-                "CFBundleDisplayName": "pdftoepub",
+                "CFBundleDisplayName": "pdf_to_epub", "CFBundleName": "pdf_to_epub",
                 "LSUIElement": True,  # no Dock icon/menu bar: it is a local web server; quit from the web UI
                 "LSMinimumSystemVersion": os.environ.get("MAC_MIN_OS", "12.0"),
                 "NSHighResolutionCapable": True,

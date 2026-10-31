@@ -179,8 +179,8 @@ def run_server(host: str, port: int, *, open_browser: bool = False, reload: bool
                     pass
 
         threading.Thread(target=opener, daemon=True).start()
-    _say(f"pdftoepub tourne sur {url} - fermez cette fen\u00eatre (ou Ctrl+C) pour quitter\n"
-         f"pdftoepub is running at {url} - close this window (or press Ctrl+C) to quit")
+    _say(f"pdf_to_epub tourne sur {url} - fermez cette fen\u00eatre (ou Ctrl+C) pour quitter\n"
+         f"pdf_to_epub is running at {url} - close this window (or press Ctrl+C) to quit")
     if desktop:
         def stop(*_: object) -> None:  # keep uvicorn's graceful shutdown (and our cleanup) in charge of SIGTERM/SIGHUP
             server.should_exit = True
@@ -199,7 +199,7 @@ def run_server(host: str, port: int, *, open_browser: bool = False, reload: bool
     finally:
         if desktop:
             _remove_instance(data_dir)
-            _say("pdftoepub arr\u00eat\u00e9 / pdftoepub stopped")
+            _say("pdf_to_epub arr\u00eat\u00e9 / pdf_to_epub stopped")
     return 0
 
 
@@ -229,7 +229,7 @@ def _launch_ui() -> int:
         if existing:  # single instance: just bring the user back to it
             import webbrowser
 
-            print(f"pdftoepub est d\u00e9j\u00e0 lanc\u00e9 : {existing}\npdftoepub is already running: {existing}")
+            print(f"pdf_to_epub est d\u00e9j\u00e0 lanc\u00e9 : {existing}\npdf_to_epub is already running: {existing}")
             webbrowser.open(existing)
             return 0
         return run_server(host, _free_port(host), open_browser=True, desktop=True)

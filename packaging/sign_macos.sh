@@ -69,7 +69,7 @@ case ${1:-} in
     # DMG: the app + an /Applications shortcut, so users drag and drop
     S=$(mktemp -d); cp -R "$APP" "$S/"; ln -s /Applications "$S/Applications"
     rm -f "$DMG"
-    hdiutil create -quiet -volname "pdftoepub" -srcfolder "$S" -fs HFS+ -format UDZO "$DMG"
+    hdiutil create -quiet -volname "pdf_to_epub" -srcfolder "$S" -fs HFS+ -format UDZO "$DMG"
     rm -rf "$S"
     if [ -n "$ID" ]; then
       codesign --force --timestamp "${KC[@]}" -s "$ID" "$DMG"
@@ -81,7 +81,7 @@ case ${1:-} in
       fi
     else
       echo "NOTE: ad-hoc signature only (APPLE_SIGN_IDENTITY unset): on other Macs Gatekeeper says the app"
-      echo "      cannot be verified; users must right-click > Open once (or: xattr -dr com.apple.quarantine pdftoepub.app)."
+      echo "      cannot be verified; users must right-click > Open once (or: xattr -dr com.apple.quarantine pdf_to_epub.app)."
     fi
     ;;
   *) sed -n '2,16p' "$0"; exit 2;;

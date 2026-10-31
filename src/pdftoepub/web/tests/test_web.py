@@ -63,7 +63,7 @@ def post(c, data=PDF, name="My Book.pdf", options=None, headers=None):
 
 def test_healthz_and_front(client):
     assert client.get("/healthz").json()["ok"] is True
-    assert "PDF" in client.get("/").text
+    assert "<title>pdf_to_epub</title>" in client.get("/").text
 
 
 def test_upload_poll_download(client):
