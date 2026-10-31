@@ -60,6 +60,10 @@ def esc(t: str) -> str:
     return escape(_XML_BAD.sub("", t), quote=False)
 
 
+def _key(t: str) -> str:
+    return re.sub(r"[\W_]+", "", t.lower())
+
+
 def attr(t: str) -> str:
     return escape(_XML_BAD.sub("", t), quote=True)
 
@@ -289,8 +293,9 @@ class Writer:
             for lvl, title, anchor in ch.sections:
                 if not anchor:
                     continue
-                if ch.blocks and isinstance(ch.blocks[0], Heading) and plain_title(ch.blocks[0]) == title and ch.blocks[0].level == 1:
-                    continue
+                if (ch.blocks and isinstance(ch.blocks[0], Heading) and plain_title(ch.blocks[0]) == title
+                        and ch.blocks[0].level == 1 and _key(ch.title) in _key(title)):
+                    continue  # the chapter's own h1 again (kept under a container entry such as "Main Matter")
                 flat.append((min(max(lvl, 2), 3) + base, title, f"{ch.filename}#{anchor}"))
         return flat
 

@@ -59,6 +59,39 @@ Caveats: on the math books (Calculus, Galois, Descartes) numbers inside formulas
 display formulas count as "breaks". The French OCR excerpt is compared against another OCR engine (IA's), which is not
 ground truth.
 
+## Round 8: cleaner tables of contents
+
+Before is 9b47a4f (`r8-before`) and after is this tree (`r8-after3`). Each was run on all 19 documents with both backends.
+Text metrics unchanged everywhere (word recall, order, running-head and page-number leaks, outline match), epubcheck 0
+errors. The private book is unchanged (same navigation, same text). Test suite: 435 passed, 22 skipped.
+
+**What changed** (`core/structure.py`, `core/epub.py`):
+* **Fleurons are no headings.** A lone lower-case letter classified as a heading is an ornament from a decorative font
+  (Bibebook ends every chapter with "n" in *Swinging*): dropped. It used to give a "n" entry per chapter, and *La Glèbe*
+  (no outline) was even split into chapters named "n".
+* **The chapter label joins its title.** "CHAPITRE II" set smaller right above "Photini." becomes one heading,
+  "CHAPITRE II — Photini.", after the title's own lines are joined. It used to trail at the end of the previous chapter
+  (the outline points at the title) and appear in the navigation as a sub-entry of the wrong chapter. When an outline entry
+  is only the label ("CHAPTER I."), the navigation uses the whole heading; under a container entry ("Main Matter") the
+  chapter stays listed.
+* **Labelled chapters without an outline.** When ≥3 headings of one level read "CHAPITRE n" / "Chapter n" below a few
+  larger title-page headings, the book is split there; everything before chapter I is one front-matter entry.
+* **Front matter is one entry.** The pages before the first chapter (title page, publisher's notes, credits, licence),
+  when they span ≥2 pages, no longer add sub-entries. A paper's first page keeps its "Abstract".
+* **Contents rows.** "XI 32" left alone on the last page of a printed table is no heading.
+
+| document | entries before → after | what went |
+|---|---|---|
+| Le Roi des montagnes | 43 → 13 | Bibebook pages, 10 × "n", 9 × "CHAPITRE n" under the wrong chapter |
+| La Glèbe | 25 → 14 | chapters were named "n"; now CHAPITRE I–XI after one front-matter entry |
+| Calculus Made Easy | 110 → 90 | "Chapter II" + "ON DIFFERENT DEGREES…" pairs → "CHAPTER II. — ON DIFFERENT DEGREES…" |
+| Puck, My Ántonia | 60 → 53, 73 → 66 | title-page lines; Gutenberg licence "Section n." joined to its title |
+| d2l, Descartes | −1 each | "Contents", "LA" in the front matter |
+
+Left as is: Project Gutenberg PDFs whose outline starts with a "TABLE DES MATIÈRES" entry covering the title pages
+(*Chignole*) still list the title-page lines under it; *La Glèbe* keeps its printed table and the publisher's last page
+as entries after chapter XI.
+
 ## Round 7: a real cover
 
 Before is 6a5d316 (`r7-before`) and after is this tree (`r7-after`). Each was run on all 19 documents with both backends.

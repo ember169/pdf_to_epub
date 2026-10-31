@@ -143,7 +143,11 @@ tests/        pytest suite, run once per backend: `pytest src/pdftoepub/core/tes
 9. **Chapters**. PDF outline when present: split at the first level with ≥2 entries (one level deeper if that still averages ≥4 pages
    per chapter); each entry is located by matching a heading block of that page by title, else by destination y, else page start. Deeper
    entries become nav sub-sections. Without outline: split at the smallest heading level occurring ≥2 times, never on OCR-derived headings unless they are
-   strong (≥1.5× body, centred, ≤60 chars).
+   strong (≥1.5× body, centred, ≤60 chars); when ≥3 headings of a deeper level read "CHAPITRE n" / "Chapter n" (at least
+   half of that level), split there instead and keep everything before chapter I as front matter. A label heading
+   ("CHAPITRE II") right above a heading of another size on the same page is joined to it ("CHAPITRE II — Photini.").
+   A lone lower-case letter set as a heading is a fleuron (dropped); "XI 32" is a contents row, not a heading. Front
+   matter spanning ≥2 pages before the first chapter is one nav entry without sub-entries.
    **Scanned books** (`openings.py`; no outline and ≥8 pages, mostly OCR): chapters come from the page layout — an opening
    page starts lower than usual (≥3 % of the page height below the median text top), with short centred capitalised lines
    above a paragraph; labels (`CHAPTER IV`, `Chapitre premier`, `LIVRE II`, `II.`) and size add evidence; a half-title page

@@ -436,6 +436,10 @@ def convert_blocks(raw: list[RawBlock], ctx: Ctx, notes: dict[int, list[RawNote]
                     r.noteref = ids[r.text.strip()]
                     used.add(r.text.strip())
         rank = headings.classify(b)
+        if rank is not None and not b.math and re.fullmatch(r"[a-zà-ÿ]", plain(runs).strip()):
+            continue  # one lower-case letter set large: a fleuron from an ornament font ("n" in Swinging), not a title
+        if rank is not None and re.fullmatch(r"(?:[IVXLC]+|\d{1,3})\.?\s+\d{1,4}", plain(runs).strip()):
+            rank = None  # "XI 32": a contents row left alone on the last page of a printed table, not a title
         if rank is not None and b.ocr and (garbled_heading(plain(runs)) or (plan is not None and not chapter_title)
                                            or b.page in ctx.sparse_pages):
             rank = None  # OCR noise ("MeeISLAND PLANT", "_i"), front matter of a planned book, a title page / plate line
@@ -636,7 +640,19 @@ def merge_adjacent_headings(blocks: list[Block]) -> list[Block]:
                 a.runs = normalize_runs(a.runs + [Run(" ")] + b.runs)
                 continue
         out.append(b)
-    return out
+    # then "CHAPITRE II" set smaller (or larger) right above the chapter's (now whole) title: one heading, so the label
+    # opens the chapter instead of trailing at the end of the previous one when the outline points at the title
+    merged: list[Block] = []
+    for b in out:
+        if (merged and isinstance(b, Heading) and isinstance(merged[-1], Heading) and merged[-1].level != b.level
+                and merged[-1].page == b.page and openings.LABEL_RE.fullmatch(plain(merged[-1].runs).strip())
+                and 0 < b.y0 - merged[-1].y0 < 6 * max(merged[-1].size, b.size, 1)):
+            a = merged[-1]
+            a.runs = normalize_runs(a.runs + [Run(" — ")] + b.runs)
+            a.level, a.size, a.weak, a.labelled = min(a.level, b.level), max(a.size, b.size), a.weak and b.weak, True
+            continue
+        merged.append(b)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +709,10 @@ def _match_heading(blocks: list[Block], lo: int, hi: int, title: str) -> int | N
             if nh and (nh == nt or (len(nt) >= 4 and (nt in nh or (len(nh) >= 4 and nh in nt)))):
                 return i
     return None
+
+
+# "CHAPITRE IV", "Chapter 2: …": a chapter word and a whole number ("Section 1.1" is a section, "Part II" a part)
+_CHAPTER_LABEL = re.compile(rf"^(?:chapter|chapitre|chap\.|kapitel|capítulo|capitolo)\s+{openings._NUM}(?![.\d])", re.I)
 
 
 def assign_ids(blocks: list[Block]) -> None:
@@ -753,8 +773,18 @@ def build_chapters(blocks: list[Block], toc: list[TocEntry], npages: int, doc_ti
         # without an outline, chapters split only on headings with reliable evidence (not OCR size guesses)
         levels = Counter(b.level for b in blocks if isinstance(b, Heading) and not b.weak)
         split = next((lv for lv in sorted(levels) if levels[lv] >= 2), None)
+        # chapters labelled "CHAPITRE I", "CHAPTER II" … below a few larger title-page / publisher headings: split there
+        labels = Counter(b.level for b in blocks if isinstance(b, Heading) and not b.weak
+                         and _CHAPTER_LABEL.match(plain(b.runs).strip()))
+        deeper = [lv for lv in labels if labels[lv] >= 3 and labels[lv] >= 0.5 * levels[lv] and split is not None and lv > split]
+        first_label = 0
+        if deeper:
+            split = min(deeper)
+            # the title page and publisher's pages before chapter I stay one front-matter part, not one chapter each
+            first_label = next(i for i, b in enumerate(blocks) if isinstance(b, Heading) and b.level == split
+                               and not b.weak and _CHAPTER_LABEL.match(plain(b.runs).strip()))
         if split is not None:
-            for i, b in enumerate(blocks):
+            for i, b in enumerate(blocks[first_label:], first_label):
                 if isinstance(b, Heading) and b.level <= split and not b.weak:
                     starts.append((i, plain(b.runs), True, 1))
 
@@ -769,7 +799,10 @@ def build_chapters(blocks: list[Block], toc: list[TocEntry], npages: int, doc_ti
         chapters.append(ch)
     else:
         if starts[0][0] > 0:
-            chapters.append(Chapter(doc_title, blocks[: starts[0][0]], first_page=blocks[0].page))
+            front = Chapter(doc_title, blocks[: starts[0][0]], first_page=blocks[0].page)
+            # a title page and publisher's pages; not a paper's first page, whose abstract is a real section
+            front.front_matter = blocks[starts[0][0] - 1].page > blocks[0].page
+            chapters.append(front)
         bounds = [s[0] for s in starts] + [len(blocks)]
         for k, (idx, title, is_h, lvl) in enumerate(starts):
             ch = Chapter(title, blocks[idx:bounds[k + 1]], first_page=blocks[idx].page if idx < len(blocks) else 1)
@@ -780,6 +813,12 @@ def build_chapters(blocks: list[Block], toc: list[TocEntry], npages: int, doc_ti
             chapters.append(ch)
     for ch in chapters:
         _finalize_chapter(ch)
+        if ch.front_matter:
+            ch.sections = []  # what comes before the first chapter (title page, publisher's notes, licence): one entry
+        if ch.title_is_heading and ch.blocks and openings.LABEL_RE.fullmatch(ch.title.strip()):
+            head = plain(ch.blocks[0].runs)  # an outline entry "CHAPTER I." over the heading "CHAPTER I. — THE TITLE"
+            if _norm(head).startswith(_norm(ch.title)) and len(_norm(head)) > len(_norm(ch.title)):
+                ch.title = head
     # attach outline sub-entries as nav sections
     if nav_extra:
         _attach_extra(chapters, blocks, nav_extra)
@@ -808,6 +847,11 @@ def _finalize_chapter(ch: Chapter) -> None:
         h.level = mapping[h.level]
     ch.sections = []
     n = 0
+    if (isinstance(first, Heading) and first is ch.blocks[0] and first.labelled
+            and _norm(ch.title) not in _norm(plain(first.runs))):
+        # an outline container ("Main Matter") opening on "CHAPTER I. — TITLE": the chapter stays in the navigation
+        first.id = first.id or "top"
+        ch.sections.append((2, plain(first.runs), first.id))
     for b in ch.blocks:
         if isinstance(b, Heading) and b.level in (2, 3):
             if b.id is None:

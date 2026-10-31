@@ -184,6 +184,7 @@ class Heading:
     break_before: str | None = None
     id: str | None = None
     weak: bool = False  # OCR-derived without strong evidence: a section heading, never a chapter split
+    labelled: bool = False  # "CHAPITRE II — Photini.": a chapter label joined to the title below it
 
 
 @dataclass
@@ -251,6 +252,7 @@ class Chapter:
     sections: list[tuple[int, str, str | None]] = field(default_factory=list)  # (level, title, anchor)
     title_is_heading: bool = False
     nav_level: int = 1  # 2: a chapter inside a part (nested under it in the navigation)
+    front_matter: bool = False  # the pages before the first chapter: one nav entry, no sections
 
 
 @dataclass
