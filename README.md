@@ -22,7 +22,7 @@
 texte, qui suit la taille de police de votre liseuse ou de votre téléphone. Les livres scannés sont lus par OCR. Tout
 se passe sur votre ordinateur.
 
-![Une page scannée de Zola devient un texte EPUB qui se recompose sur téléphone, en petite et en grande police](docs/images/pdf-vers-epub.jpg)
+![Un livre scanné de 1896 converti en EPUB : sa couverture, sa table des matières, un chapitre, puis le même chapitre en plus grand](docs/images/pdf-vers-epub.webp)
 
 ### Fonctionnalités
 
@@ -49,7 +49,7 @@ Rien d'autre à installer : Python et l'OCR sont inclus.
 Sur Mac, ouvrez le `.dmg` et glissez l'app dans Applications ; sur Windows, lancez le `.exe`. Une page s'ouvre dans
 votre navigateur : déposez vos PDF, cliquez **Convertir**, puis **Télécharger**.
 
-<p align="center"><img src="docs/images/interface-fr.jpg" alt="L'interface après la conversion de deux PDF, dont un scan lu par OCR" width="420"></p>
+<p align="center"><img src="docs/images/interface-fr.webp" alt="L'interface après la conversion de deux PDF, dont un scan lu par OCR" width="440"></p>
 
 <details>
 <summary><b>Premier lancement : l'app n'est pas signée</b></summary>
@@ -114,7 +114,7 @@ est sous AGPL et n'est pas inclus dans les applications. Convertissez des docume
 **pdf_to_epub turns a PDF into an EPUB book whose text adapts to the screen.** Not pictures of pages: real text that
 follows the font size of your e-reader or phone. Scanned books are read with OCR. Everything happens on your computer.
 
-![A scanned page of An Island Plant becomes EPUB text that reflows on a phone at a small and a large font size](docs/images/pdf-to-epub.jpg)
+![A scanned 1896 book converted to EPUB: its cover, its table of contents, a chapter, then the same chapter in larger text](docs/images/pdf-to-epub.webp)
 
 ### Features
 
@@ -141,7 +141,7 @@ Nothing else to install: Python and OCR are included.
 On a Mac, open the `.dmg` and drag the app to Applications; on Windows, run the `.exe`. A page opens in your browser:
 drop your PDFs, click **Convert**, then **Download**.
 
-<p align="center"><img src="docs/images/interface-en.jpg" alt="The interface after converting two PDFs, one of them a scan read with OCR" width="420"></p>
+<p align="center"><img src="docs/images/interface-en.webp" alt="The interface after converting two PDFs, one of them a scan read with OCR" width="440"></p>
 
 <details>
 <summary><b>First launch: the app is not signed</b></summary>
